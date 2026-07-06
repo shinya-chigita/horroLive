@@ -25,7 +25,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Install dependencies
@@ -35,13 +35,18 @@ jobs:
         run: npm run build
 
       - name: Deploy to Cloudflare Pages
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          # On push to main -> production deploy (branch=main).
-          # On pull_request -> preview deploy on the PR's branch.
-          command: >-
-            pages deploy dist
-            --project-name=horrolive
-            --branch=${{ github.head_ref || github.ref_name }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # push to main -> "main" (production); pull_request -> PR branch (preview).
+          DEPLOY_BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          # Create the Pages project on first run; ignore the error if it already exists.
+          npx --yes wrangler@4 pages project create horrolive \
+            --production-branch=main \
+            || echo "Pages project 'horrolive' already exists — continuing."
+
+          npx --yes wrangler@4 pages deploy dist \
+            --project-name=horrolive \
+            --branch="$DEPLOY_BRANCH" \
+            --commit-dirty=true
