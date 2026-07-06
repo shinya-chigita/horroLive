@@ -1,0 +1,6 @@
+{
+  "name": "LIVE",
+  "description": "2Dスクロールホラーアドベンチャー「LIVE」。懐中電灯、右上の配信用一人称カメラ、不穏なコメント欄のズレから恐怖を体験する、新感覚の配信型ホラーゲーム。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
