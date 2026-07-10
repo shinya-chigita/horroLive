@@ -1,60 +1,76 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+# LIVE — 配信型ホラーアドベンチャー
 
-# Run and deploy your AI Studio app
+コメント欄と配信用カメラの「見え方のズレ」を使って怪異を発見する、ブラウザ向け2Dサイドスクロール・ホラーゲームです。
 
-This contains everything you need to run your app locally.
+封鎖された廃病院を生配信しながら探索し、肉眼では見えない怪異をPIPカメラで記録します。視聴者コメントには攻略の手掛かりも混ざりますが、すべてが人間から届いた言葉とは限りません。
 
-View your app in AI Studio: https://ai.studio/apps/1408e784-3ab1-47a0-8f8b-0d1046475255
+## ゲームの特徴
 
-## Run Locally
+- **配信画面そのものがゲームUI** — 同時接続数、コメント、映像ノイズ、回線状態が物語と連動します。
+- **二つの視点** — メイン画面と配信用PIPカメラで、見えるものが異なります。
+- **動的な恐怖演出** — プレイヤーの位置、ライト、緊張度に応じてコメント、音、映像が変化します。
+- **記録と分岐** — 怪異の撮影数、発見した手掛かり、最終視聴者数によって結末が変わります。
+- **PC・タッチ操作対応** — キーボードに加え、画面上の操作ボタンでも進行できます。
 
-**Prerequisites:**  Node.js
+## 操作方法
 
+| 操作 | キー |
+| --- | --- |
+| 左右移動 | `A` / `D` または `←` / `→` |
+| 走る | `Shift` + 移動 |
+| しゃがむ | `S` / `↓` / `Ctrl` |
+| 懐中電灯 | `F` |
+| 調べる | `E` |
+| 怪異を撮影 | `Space` またはPIP内の `CAPTURE` |
 
-1. Install dependencies:
-   `npm install`
-2. Run the app:
-   `npm run dev`
+怪異を撮影するには、対象へ近づき、懐中電灯を点けた状態でPIPカメラの反応を待ってください。
 
-> Note: This is a fully client-side React + Vite app. The `GEMINI_API_KEY` /
-> `@google/genai` scaffolding from the AI Studio template is currently unused,
-> so no environment variables are required to build or run it.
+## ローカルで実行
 
-## Deploy (Cloudflare Pages + GitHub Actions CI/CD)
-
-This repo auto-deploys to **Cloudflare Pages** via GitHub Actions
-([.github/workflows/deploy.yml](.github/workflows/deploy.yml)):
-
-- **Push to `main`** → production deploy
-- **Open a pull request** → preview deploy (unique preview URL per PR)
-
-### One-time setup: add GitHub Secrets
-
-The workflow needs two repository secrets. Add them under
-**GitHub → repo → Settings → Secrets and variables → Actions → New repository secret**,
-or with the GitHub CLI:
+前提: Node.js 22 以降
 
 ```bash
-# 1. A Cloudflare API token with the "Cloudflare Pages: Edit" permission.
-#    Create it at: https://dash.cloudflare.com/profile/api-tokens
-#    (use the "Cloudflare Pages — Edit" template)
-gh secret set CLOUDFLARE_API_TOKEN --repo shinya-chigita/horroLive
-
-# 2. Your Cloudflare Account ID (found on the Cloudflare dashboard sidebar,
-#    or via `wrangler whoami`).
-gh secret set CLOUDFLARE_ACCOUNT_ID --repo shinya-chigita/horroLive
+npm install
+npm run dev
 ```
 
-On the first push to `main` after the secrets are set, the workflow creates the
-`horrolive` Pages project automatically and publishes it. The production URL will
-be `https://horrolive.pages.dev`.
+開発サーバーは既定で `http://localhost:3000` に起動します。
 
-### Build settings (for reference)
+## 品質チェック
 
-| Setting            | Value           |
-| ------------------ | --------------- |
-| Build command      | `npm run build` |
-| Build output dir   | `dist`          |
-| Framework          | Vite (React)    |
+```bash
+npm run lint
+npm run build
+```
+
+このアプリは完全なクライアントサイド構成です。現在のゲーム実行にAPIキーや環境変数は不要です。
+
+## 技術構成
+
+- React 19
+- TypeScript
+- Vite 6
+- Tailwind CSS 4
+- Canvas 2D
+- Web Audio API
+- lucide-react
+
+ゲーム進行と配信状態は `src/AppV2.tsx`、リアルタイムの探索描画は `src/components/MainGameView.tsx`、PIP映像と音響はそれぞれ専用コンポーネント／ユーティリティに分離しています。
+
+## デプロイ
+
+GitHub Actions から Cloudflare Pages へ自動デプロイします。
+
+- `main` へのpush: 本番デプロイ
+- Pull Request: ブランチごとのプレビューデプロイ
+- Build command: `npm run build`
+- Output directory: `dist`
+
+初回のみ、リポジトリのActions secretsに以下を登録してください。
+
+- `CLOUDFLARE_API_TOKEN`
+- `CLOUDFLARE_ACCOUNT_ID`
+
+## 注意
+
+本作には、強い光の点滅、突然の大音量、ジャンプスケア、ホラー表現が含まれます。体調に不安がある場合はプレイを中止してください。
