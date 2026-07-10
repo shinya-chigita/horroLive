@@ -6,373 +6,346 @@
 class SoundSynthesizer {
   private ctx: AudioContext | null = null;
   private masterGain: GainNode | null = null;
-  private droneOsc1: OscillatorNode | null = null;
-  private droneOsc2: OscillatorNode | null = null;
   private droneGain: GainNode | null = null;
-  private heartbeatInterval: any = null;
-  private isMuted: boolean = false;
-
-  constructor() {
-    // Lazy initialize when user interacts
-  }
+  private droneOscillators: OscillatorNode[] = [];
+  private heartbeatTimer: number | null = null;
+  private nextHeartbeatAt = 0;
+  private tension = 0;
+  private isMuted = false;
 
   init() {
-    if (this.ctx) return;
+    if (this.ctx) {
+      void this.resume();
+      return;
+    }
+
     try {
-      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-      this.ctx = new AudioCtx();
+      const AudioContextClass = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!AudioContextClass) return;
+
+      this.ctx = new AudioContextClass();
       this.masterGain = this.ctx.createGain();
-      this.masterGain.gain.setValueAtTime(0.4, this.ctx.currentTime);
+      this.masterGain.gain.setValueAtTime(this.isMuted ? 0 : 0.36, this.ctx.currentTime);
       this.masterGain.connect(this.ctx.destination);
-      
+
       this.startDrone();
-    } catch (e) {
-      console.warn("Failed to initialize Web Audio API:", e);
+      this.startHeartbeatScheduler();
+      void this.resume();
+    } catch (error) {
+      console.warn('Failed to initialize Web Audio API:', error);
     }
   }
 
   setMuted(mute: boolean) {
     this.isMuted = mute;
-    if (this.masterGain && this.ctx) {
-      this.masterGain.gain.setValueAtTime(mute ? 0 : 0.4, this.ctx.currentTime);
-    }
+    if (!this.ctx || !this.masterGain) return;
+
+    this.masterGain.gain.cancelScheduledValues(this.ctx.currentTime);
+    this.masterGain.gain.setTargetAtTime(mute ? 0 : 0.36, this.ctx.currentTime, 0.025);
   }
 
   getMuteState() {
     return this.isMuted;
   }
 
+  updateTension(tension: number) {
+    this.tension = Math.max(0, Math.min(100, tension));
+    if (!this.ctx || !this.droneGain) return;
+
+    const normalized = this.tension / 100;
+    const now = this.ctx.currentTime;
+    this.droneGain.gain.setTargetAtTime(0.08 + normalized * 0.2, now, 0.35);
+
+    this.droneOscillators.forEach((oscillator, index) => {
+      const baseFrequency = index === 0 ? 48 : 48.7;
+      oscillator.frequency.setTargetAtTime(baseFrequency + normalized * 17, now, 0.45);
+    });
+  }
+
+  playFlashlightClick() {
+    if (!this.ensureReady()) return;
+
+    const ctx = this.ctx!;
+    const masterGain = this.masterGain!;
+    const now = ctx.currentTime;
+    const oscillator = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    oscillator.type = 'triangle';
+    oscillator.frequency.setValueAtTime(1900, now);
+    oscillator.frequency.exponentialRampToValueAtTime(120, now + 0.035);
+    gain.gain.setValueAtTime(0.16, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.055);
+
+    oscillator.connect(gain);
+    gain.connect(masterGain);
+    oscillator.start(now);
+    oscillator.stop(now + 0.06);
+  }
+
+  playGlitch() {
+    if (!this.ensureReady()) return;
+
+    const ctx = this.ctx!;
+    const masterGain = this.masterGain!;
+    const now = ctx.currentTime;
+    const duration = 0.16;
+    const buffer = ctx.createBuffer(1, Math.floor(ctx.sampleRate * duration), ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+
+    for (let index = 0; index < data.length; index += 1) {
+      data[index] = (Math.random() * 2 - 1) * (index % 17 < 8 ? 1 : 0.2);
+    }
+
+    const source = ctx.createBufferSource();
+    const filter = ctx.createBiquadFilter();
+    const gain = ctx.createGain();
+
+    source.buffer = buffer;
+    filter.type = 'bandpass';
+    filter.frequency.setValueAtTime(780, now);
+    filter.frequency.exponentialRampToValueAtTime(1800, now + duration);
+    filter.Q.setValueAtTime(2.4, now);
+    gain.gain.setValueAtTime(0.18, now);
+    gain.gain.setValueAtTime(0.04, now + 0.045);
+    gain.gain.setValueAtTime(0.16, now + 0.08);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+
+    source.connect(filter);
+    filter.connect(gain);
+    gain.connect(masterGain);
+    source.start(now);
+  }
+
+  playNotification() {
+    if (!this.ensureReady()) return;
+
+    const ctx = this.ctx!;
+    const masterGain = this.masterGain!;
+    const now = ctx.currentTime;
+    const oscillator = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    oscillator.type = 'sine';
+    oscillator.frequency.setValueAtTime(987.77, now);
+    oscillator.frequency.setValueAtTime(1318.51, now + 0.075);
+    gain.gain.setValueAtTime(0.065, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.26);
+
+    oscillator.connect(gain);
+    gain.connect(masterGain);
+    oscillator.start(now);
+    oscillator.stop(now + 0.28);
+  }
+
+  playCaptureSuccess() {
+    if (!this.ensureReady()) return;
+
+    const ctx = this.ctx!;
+    const masterGain = this.masterGain!;
+    const now = ctx.currentTime;
+
+    const beep = ctx.createOscillator();
+    const beepGain = ctx.createGain();
+    beep.type = 'sine';
+    beep.frequency.setValueAtTime(2100, now);
+    beep.frequency.setValueAtTime(2700, now + 0.055);
+    beepGain.gain.setValueAtTime(0.11, now);
+    beepGain.gain.exponentialRampToValueAtTime(0.001, now + 0.13);
+    beep.connect(beepGain);
+    beepGain.connect(masterGain);
+    beep.start(now);
+    beep.stop(now + 0.14);
+
+    const duration = 0.1;
+    const buffer = ctx.createBuffer(1, Math.floor(ctx.sampleRate * duration), ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let index = 0; index < data.length; index += 1) {
+      data[index] = Math.random() * 2 - 1;
+    }
+
+    const shutter = ctx.createBufferSource();
+    const shutterGain = ctx.createGain();
+    shutter.buffer = buffer;
+    shutterGain.gain.setValueAtTime(0.13, now + 0.04);
+    shutterGain.gain.exponentialRampToValueAtTime(0.001, now + 0.14);
+    shutter.connect(shutterGain);
+    shutterGain.connect(masterGain);
+    shutter.start(now + 0.04);
+  }
+
+  playStinger() {
+    if (!this.ensureReady()) return;
+
+    const ctx = this.ctx!;
+    const masterGain = this.masterGain!;
+    const now = ctx.currentTime;
+    const filter = ctx.createBiquadFilter();
+    const gain = ctx.createGain();
+    const frequencies = [73, 76.5, 146];
+
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(170, now);
+    filter.frequency.exponentialRampToValueAtTime(1300, now + 0.9);
+    filter.Q.setValueAtTime(5, now);
+
+    gain.gain.setValueAtTime(0.025, now);
+    gain.gain.linearRampToValueAtTime(0.26, now + 0.33);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 1.7);
+
+    filter.connect(gain);
+    gain.connect(masterGain);
+
+    frequencies.forEach((frequency, index) => {
+      const oscillator = ctx.createOscillator();
+      oscillator.type = index === 2 ? 'triangle' : 'sawtooth';
+      oscillator.frequency.setValueAtTime(frequency, now);
+      oscillator.frequency.exponentialRampToValueAtTime(frequency * (index === 2 ? 2.6 : 3.2), now + 1.1);
+      oscillator.connect(filter);
+      oscillator.start(now);
+      oscillator.stop(now + 1.75);
+    });
+  }
+
+  playFootstep(isRunning: boolean) {
+    if (!this.ensureReady()) return;
+
+    const ctx = this.ctx!;
+    const masterGain = this.masterGain!;
+    const now = ctx.currentTime;
+    const oscillator = ctx.createOscillator();
+    const filter = ctx.createBiquadFilter();
+    const gain = ctx.createGain();
+
+    oscillator.type = 'triangle';
+    oscillator.frequency.setValueAtTime(isRunning ? 125 : 98, now);
+    oscillator.frequency.exponentialRampToValueAtTime(24, now + 0.11);
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(isRunning ? 170 : 125, now);
+    gain.gain.setValueAtTime(isRunning ? 0.24 : 0.14, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+
+    oscillator.connect(filter);
+    filter.connect(gain);
+    gain.connect(masterGain);
+    oscillator.start(now);
+    oscillator.stop(now + 0.13);
+  }
+
+  stop() {
+    if (this.heartbeatTimer !== null) {
+      window.clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+
+    this.droneOscillators.forEach((oscillator) => {
+      try {
+        oscillator.stop();
+      } catch {
+        // Already stopped.
+      }
+    });
+    this.droneOscillators = [];
+
+    if (this.ctx) {
+      void this.ctx.close();
+    }
+
+    this.ctx = null;
+    this.masterGain = null;
+    this.droneGain = null;
+    this.nextHeartbeatAt = 0;
+  }
+
+  private ensureReady() {
+    if (!this.ctx || !this.masterGain) {
+      this.init();
+    }
+
+    if (!this.ctx || !this.masterGain || this.isMuted) return false;
+    void this.resume();
+    return true;
+  }
+
+  private async resume() {
+    if (this.ctx?.state === 'suspended') {
+      try {
+        await this.ctx.resume();
+      } catch {
+        // The next user gesture will retry.
+      }
+    }
+  }
+
   private startDrone() {
     if (!this.ctx || !this.masterGain) return;
 
-    try {
-      this.droneGain = this.ctx.createGain();
-      this.droneGain.gain.setValueAtTime(0.15, this.ctx.currentTime);
-      this.droneGain.connect(this.masterGain);
+    const filter = this.ctx.createBiquadFilter();
+    this.droneGain = this.ctx.createGain();
+    this.droneGain.gain.setValueAtTime(0.09, this.ctx.currentTime);
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(115, this.ctx.currentTime);
+    filter.Q.setValueAtTime(4, this.ctx.currentTime);
 
-      // Low frequency rumble
-      this.droneOsc1 = this.ctx.createOscillator();
-      this.droneOsc1.type = 'sawtooth';
-      this.droneOsc1.frequency.setValueAtTime(55, this.ctx.currentTime); // A1
+    filter.connect(this.droneGain);
+    this.droneGain.connect(this.masterGain);
 
-      // Detuned second oscillator
-      this.droneOsc2 = this.ctx.createOscillator();
-      this.droneOsc2.type = 'sine';
-      this.droneOsc2.frequency.setValueAtTime(55.8, this.ctx.currentTime);
-
-      // Filter to make it muddy and warm
-      const filter = this.ctx.createBiquadFilter();
-      filter.type = 'lowpass';
-      filter.frequency.setValueAtTime(120, this.ctx.currentTime);
-      filter.Q.setValueAtTime(4, this.ctx.currentTime);
-
-      this.droneOsc1.connect(filter);
-      this.droneOsc2.connect(filter);
-      filter.connect(this.droneGain);
-
-      this.droneOsc1.start();
-      this.droneOsc2.start();
-    } catch (err) {
-      console.error("Drone generation failed:", err);
-    }
+    [48, 48.7].forEach((frequency, index) => {
+      const oscillator = this.ctx!.createOscillator();
+      oscillator.type = index === 0 ? 'sawtooth' : 'sine';
+      oscillator.frequency.setValueAtTime(frequency, this.ctx!.currentTime);
+      oscillator.connect(filter);
+      oscillator.start();
+      this.droneOscillators.push(oscillator);
+    });
   }
 
-  updateTension(tension: number) {
-    if (!this.ctx || !this.droneGain || !this.masterGain) return;
-    const t = tension / 100; // 0 to 1
+  private startHeartbeatScheduler() {
+    if (this.heartbeatTimer !== null) return;
 
-    // Modulate ambient drone lowpass cutoff based on tension
-    if (this.droneOsc1) {
-      const frequencyValue = 55 + t * 20; // slide pitch up slightly
-      this.droneOsc1.frequency.setTargetAtTime(frequencyValue, this.ctx.currentTime, 0.5);
-    }
+    this.heartbeatTimer = window.setInterval(() => {
+      if (!this.ctx || !this.masterGain || this.isMuted || this.tension < 15) {
+        return;
+      }
 
-    // Adjust volume of ambient drone
-    const droneVol = 0.12 + t * 0.18;
-    this.droneGain.gain.setTargetAtTime(droneVol, this.ctx.currentTime, 0.3);
+      const now = this.ctx.currentTime;
+      if (now < this.nextHeartbeatAt) return;
 
-    // Dynamic heartbeat rate and intensity
-    this.updateHeartbeat(tension);
-  }
-
-  private updateHeartbeat(tension: number) {
-    if (this.heartbeatInterval) {
-      clearInterval(this.heartbeatInterval);
-      this.heartbeatInterval = null;
-    }
-
-    if (tension < 10) return;
-
-    // tension 10 -> interval 1200ms
-    // tension 100 -> interval 350ms
-    const interval = Math.max(350, 1300 - (tension * 9.5));
-
-    this.heartbeatInterval = setInterval(() => {
-      this.playHeartbeatBeat(tension);
-    }, interval);
+      const interval = Math.max(0.34, 1.28 - this.tension * 0.0094);
+      this.playHeartbeatBeat(this.tension);
+      this.nextHeartbeatAt = now + interval;
+    }, 80);
   }
 
   private playHeartbeatBeat(tension: number) {
     if (!this.ctx || !this.masterGain || this.isMuted) return;
 
-    try {
-      const time = this.ctx.currentTime;
-      const intensity = 0.2 + (tension / 100) * 0.5;
-
-      // Double beat: Thump-thump
-      this.triggerThump(time, intensity, 60);
-      this.triggerThump(time + 0.15, intensity * 0.8, 55);
-    } catch (e) {
-      // Ignore
-    }
+    const now = this.ctx.currentTime;
+    const intensity = 0.12 + (tension / 100) * 0.32;
+    this.triggerThump(now, intensity, 62);
+    this.triggerThump(now + 0.14, intensity * 0.74, 54);
   }
 
-  private triggerThump(startTime: number, intensity: number, baseFreq: number) {
+  private triggerThump(startTime: number, intensity: number, baseFrequency: number) {
     if (!this.ctx || !this.masterGain) return;
 
-    const osc = this.ctx.createOscillator();
-    const gain = this.ctx.createGain();
+    const oscillator = this.ctx.createOscillator();
     const filter = this.ctx.createBiquadFilter();
+    const gain = this.ctx.createGain();
 
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(baseFreq, startTime);
-    osc.frequency.exponentialRampToValueAtTime(0.01, startTime + 0.25);
-
-    gain.gain.setValueAtTime(intensity, startTime);
-    gain.gain.exponentialRampToValueAtTime(0.01, startTime + 0.28);
-
+    oscillator.type = 'sine';
+    oscillator.frequency.setValueAtTime(baseFrequency, startTime);
+    oscillator.frequency.exponentialRampToValueAtTime(18, startTime + 0.22);
     filter.type = 'lowpass';
-    filter.frequency.setValueAtTime(80, startTime);
+    filter.frequency.setValueAtTime(90, startTime);
+    gain.gain.setValueAtTime(intensity, startTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, startTime + 0.24);
 
-    osc.connect(filter);
+    oscillator.connect(filter);
     filter.connect(gain);
     gain.connect(this.masterGain);
-
-    osc.start(startTime);
-    osc.stop(startTime + 0.3);
-  }
-
-  playFlashlightClick() {
-    if (!this.ctx || !this.masterGain || this.isMuted) return;
-    this.init(); // Ensure initialized
-
-    try {
-      const time = this.ctx.currentTime;
-      const osc = this.ctx.createOscillator();
-      const gain = this.ctx.createGain();
-
-      osc.type = 'triangle';
-      osc.frequency.setValueAtTime(2000, time);
-      osc.frequency.setValueAtTime(100, time + 0.01);
-
-      gain.gain.setValueAtTime(0.2, time);
-      gain.gain.exponentialRampToValueAtTime(0.01, time + 0.05);
-
-      osc.connect(gain);
-      gain.connect(this.masterGain);
-
-      osc.start(time);
-      osc.stop(time + 0.06);
-    } catch (e) {}
-  }
-
-  playGlitch() {
-    if (!this.ctx || !this.masterGain || this.isMuted) return;
-    this.init();
-
-    try {
-      const time = this.ctx.currentTime;
-      const bufferSize = this.ctx.sampleRate * 0.15; // 150ms of noise
-      const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
-      const data = buffer.getChannelData(0);
-
-      for (let i = 0; i < bufferSize; i++) {
-        data[i] = Math.random() * 2 - 1;
-      }
-
-      const noiseNode = this.ctx.createBufferSource();
-      noiseNode.buffer = buffer;
-
-      const filter = this.ctx.createBiquadFilter();
-      filter.type = 'bandpass';
-      filter.frequency.setValueAtTime(800, time);
-      filter.Q.setValueAtTime(2, time);
-
-      const gain = this.ctx.createGain();
-      gain.gain.setValueAtTime(0.25, time);
-      gain.gain.setValueAtTime(0.05, time + 0.05);
-      gain.gain.setValueAtTime(0.2, time + 0.08);
-      gain.gain.exponentialRampToValueAtTime(0.001, time + 0.15);
-
-      noiseNode.connect(filter);
-      filter.connect(gain);
-      gain.connect(this.masterGain);
-
-      noiseNode.start(time);
-    } catch (e) {}
-  }
-
-  playNotification() {
-    if (!this.ctx || !this.masterGain || this.isMuted) return;
-    this.init();
-
-    try {
-      const time = this.ctx.currentTime;
-      const osc = this.ctx.createOscillator();
-      const gain = this.ctx.createGain();
-
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(987.77, time); // B5
-      osc.frequency.setValueAtTime(1318.51, time + 0.08); // E6
-
-      gain.gain.setValueAtTime(0.08, time);
-      gain.gain.exponentialRampToValueAtTime(0.001, time + 0.3);
-
-      osc.connect(gain);
-      gain.connect(this.masterGain);
-
-      osc.start(time);
-      osc.stop(time + 0.35);
-    } catch (e) {}
-  }
-
-  playCaptureSuccess() {
-    if (!this.ctx || !this.masterGain || this.isMuted) return;
-    this.init();
-
-    try {
-      const time = this.ctx.currentTime;
-      
-      // Camera beep
-      const oscBeep = this.ctx.createOscillator();
-      const gainBeep = this.ctx.createGain();
-      oscBeep.type = 'sine';
-      oscBeep.frequency.setValueAtTime(2200, time);
-      gainBeep.gain.setValueAtTime(0.12, time);
-      gainBeep.gain.exponentialRampToValueAtTime(0.001, time + 0.12);
-      oscBeep.connect(gainBeep);
-      gainBeep.connect(this.masterGain);
-      oscBeep.start(time);
-      oscBeep.stop(time + 0.15);
-
-      // Camera shutter white noise burst
-      const bufferSize = this.ctx.sampleRate * 0.12;
-      const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
-      const data = buffer.getChannelData(0);
-      for (let i = 0; i < bufferSize; i++) {
-        data[i] = Math.random() * 2 - 1;
-      }
-      const noise = this.ctx.createBufferSource();
-      noise.buffer = buffer;
-      
-      const shutterGain = this.ctx.createGain();
-      shutterGain.gain.setValueAtTime(0.18, time + 0.05);
-      shutterGain.gain.exponentialRampToValueAtTime(0.001, time + 0.17);
-
-      noise.connect(shutterGain);
-      shutterGain.connect(this.masterGain);
-      noise.start(time + 0.05);
-    } catch (e) {}
-  }
-
-  playStinger() {
-    if (!this.ctx || !this.masterGain || this.isMuted) return;
-    this.init();
-
-    try {
-      const time = this.ctx.currentTime;
-      
-      // Terror swell
-      const osc1 = this.ctx.createOscillator();
-      const osc2 = this.ctx.createOscillator();
-      const osc3 = this.ctx.createOscillator();
-      const gain = this.ctx.createGain();
-      const filter = this.ctx.createBiquadFilter();
-
-      osc1.type = 'sawtooth';
-      osc1.frequency.setValueAtTime(80, time);
-      osc1.frequency.exponentialRampToValueAtTime(260, time + 1.2);
-
-      osc2.type = 'sawtooth';
-      osc2.frequency.setValueAtTime(82, time);
-      osc2.frequency.exponentialRampToValueAtTime(255, time + 1.2);
-
-      osc3.type = 'triangle';
-      osc3.frequency.setValueAtTime(150, time);
-      osc3.frequency.exponentialRampToValueAtTime(450, time + 1.2);
-
-      filter.type = 'lowpass';
-      filter.frequency.setValueAtTime(200, time);
-      filter.frequency.exponentialRampToValueAtTime(1000, time + 1.0);
-
-      gain.gain.setValueAtTime(0.05, time);
-      gain.gain.linearRampToValueAtTime(0.35, time + 0.4);
-      gain.gain.exponentialRampToValueAtTime(0.001, time + 2.0);
-
-      osc1.connect(filter);
-      osc2.connect(filter);
-      osc3.connect(filter);
-      filter.connect(gain);
-      gain.connect(this.masterGain);
-
-      osc1.start(time);
-      osc2.start(time);
-      osc3.start(time);
-
-      osc1.stop(time + 2.1);
-      osc2.stop(time + 2.1);
-      osc3.stop(time + 2.1);
-    } catch (e) {}
-  }
-
-  playFootstep(isRunning: boolean) {
-    if (!this.ctx || !this.masterGain || this.isMuted) return;
-    this.init();
-
-    try {
-      const time = this.ctx.currentTime;
-      const osc = this.ctx.createOscillator();
-      const filter = this.ctx.createBiquadFilter();
-      const gain = this.ctx.createGain();
-
-      osc.type = 'triangle';
-      osc.frequency.setValueAtTime(100, time);
-      osc.frequency.exponentialRampToValueAtTime(10, time + 0.12);
-
-      filter.type = 'lowpass';
-      filter.frequency.setValueAtTime(120, time);
-
-      gain.gain.setValueAtTime(isRunning ? 0.35 : 0.2, time);
-      gain.gain.exponentialRampToValueAtTime(0.01, time + 0.12);
-
-      osc.connect(filter);
-      filter.connect(gain);
-      gain.connect(this.masterGain);
-
-      osc.start(time);
-      osc.stop(time + 0.15);
-    } catch (e) {}
-  }
-
-  stop() {
-    if (this.heartbeatInterval) {
-      clearInterval(this.heartbeatInterval);
-      this.heartbeatInterval = null;
-    }
-    try {
-      if (this.droneOsc1) {
-        this.droneOsc1.stop();
-        this.droneOsc1 = null;
-      }
-      if (this.droneOsc2) {
-        this.droneOsc2.stop();
-        this.droneOsc2 = null;
-      }
-      if (this.ctx) {
-        this.ctx.close();
-        this.ctx = null;
-      }
-    } catch (e) {}
+    oscillator.start(startTime);
+    oscillator.stop(startTime + 0.25);
   }
 }
 
