@@ -1,60 +1,108 @@
 <div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
+
+# LIVE
+
+**視聴者は、味方とは限らない。**
+
+廃病院から生配信する、ブラウザ完結型の2Dホラーアドベンチャー。
+
 </div>
 
-# Run and deploy your AI Studio app
+## About
 
-This contains everything you need to run your app locally.
+`LIVE` は、横スクロール探索と配信画面のUIを組み合わせた短編ホラーゲームです。
+プレイヤーは封鎖された「白鳴霊園付属病棟」を探索し、配信カメラにだけ映る怪異を撮影しながら、手がかりを集めて非常口を目指します。
 
-View your app in AI Studio: https://ai.studio/apps/1408e784-3ab1-47a0-8f8b-0d1046475255
+同時接続数はスコアであると同時に、呪いを増幅するリスクでもあります。集めた証拠、撮影した怪異、最終的な視聴者数によって結末が変化します。
 
-## Run Locally
+## Features
 
-**Prerequisites:**  Node.js
+- Canvasで描画する2Dサイドスクロール探索
+- 肉眼と配信カメラで見え方が異なる怪異
+- 状況に反応する疑似ライブコメント
+- 懐中電灯、バッテリー、TENSION、体力の管理
+- Web Audio APIによる動的な環境音・心拍・効果音
+- 証拠回収と怪異撮影による複数エンディング
+- キーボード・マウス・タッチ操作対応
+- レスポンシブUI、低モーション設定への配慮
 
+## Controls
 
-1. Install dependencies:
-   `npm install`
-2. Run the app:
-   `npm run dev`
+| 操作 | キー |
+| --- | --- |
+| 左右移動 | `A` / `D` または `←` / `→` |
+| 走る | `Shift` |
+| しゃがむ | `S` / `Ctrl` / `↓` |
+| 懐中電灯 | `F` |
+| 調べる | `E` |
+| 怪異を撮影 | `Space` またはカメラの `CAPTURE` |
 
-> Note: This is a fully client-side React + Vite app. The `GEMINI_API_KEY` /
-> `@google/genai` scaffolding from the AI Studio template is currently unused,
-> so no environment variables are required to build or run it.
+ゲーム画面にはタッチ操作用のオンスクリーンボタンも表示されます。
 
-## Deploy (Cloudflare Pages + GitHub Actions CI/CD)
+## Tech stack
 
-This repo auto-deploys to **Cloudflare Pages** via GitHub Actions
-([.github/workflows/deploy.yml](.github/workflows/deploy.yml)):
+- React 19
+- TypeScript
+- Vite 6
+- Tailwind CSS 4
+- Lucide React
+- HTML Canvas
+- Web Audio API
+- Cloudflare Pages
+- GitHub Actions
 
-- **Push to `main`** → production deploy
-- **Open a pull request** → preview deploy (unique preview URL per PR)
+## Run locally
 
-### One-time setup: add GitHub Secrets
-
-The workflow needs two repository secrets. Add them under
-**GitHub → repo → Settings → Secrets and variables → Actions → New repository secret**,
-or with the GitHub CLI:
+Node.js 22 以降を推奨します。
 
 ```bash
-# 1. A Cloudflare API token with the "Cloudflare Pages: Edit" permission.
-#    Create it at: https://dash.cloudflare.com/profile/api-tokens
-#    (use the "Cloudflare Pages — Edit" template)
-gh secret set CLOUDFLARE_API_TOKEN --repo shinya-chigita/horroLive
-
-# 2. Your Cloudflare Account ID (found on the Cloudflare dashboard sidebar,
-#    or via `wrangler whoami`).
-gh secret set CLOUDFLARE_ACCOUNT_ID --repo shinya-chigita/horroLive
+npm install
+npm run dev
 ```
 
-On the first push to `main` after the secrets are set, the workflow creates the
-`horrolive` Pages project automatically and publishes it. The production URL will
-be `https://horrolive.pages.dev`.
+開発サーバーは `http://localhost:3000` で起動します。
+このアプリは完全なクライアントサイド構成のため、環境変数やAPIキーは不要です。
 
-### Build settings (for reference)
+## Quality checks
 
-| Setting            | Value           |
-| ------------------ | --------------- |
-| Build command      | `npm run build` |
-| Build output dir   | `dist`          |
-| Framework          | Vite (React)    |
+```bash
+npm run lint
+npm run build
+```
+
+Pull Request と `main` へのpushでは、GitHub Actionsが型チェックと本番ビルドを実行します。
+
+## Deploy
+
+Cloudflare Pagesへのデプロイは `.github/workflows/deploy.yml` で自動化されています。
+
+- `main` へのpush: production deploy
+- Pull Request: branch preview deploy
+
+初回のみ、リポジトリのActions secretsに次の値を登録してください。
+
+- `CLOUDFLARE_API_TOKEN`
+- `CLOUDFLARE_ACCOUNT_ID`
+
+本番URLは `https://horrolive.pages.dev` を想定しています。
+
+## Project structure
+
+```text
+src/
+├── App.tsx                         # ゲーム全体の状態・進行・画面構成
+├── components/
+│   ├── TitleScreen.tsx             # タイトル・ゲーム導入
+│   ├── StreamHeader.tsx            # 配信情報とステータス
+│   ├── MainGameView.tsx            # Canvas描画・移動・探索
+│   ├── PipCamera.tsx               # 配信カメラ・怪異撮影
+│   ├── LiveChat.tsx                # 疑似ライブコメント
+│   └── InvestigationJournal.tsx    # アイテム・ログ・撮影記録
+├── utils/audio.ts                  # Web Audio APIによる動的音響
+├── types.ts                        # ゲーム型定義とチャプター情報
+└── index.css                       # Tailwindと共通演出
+```
+
+## Content warning
+
+強い光の点滅、大音量、ジャンプスケア、恐怖表現を含みます。光刺激や恐怖表現が苦手な方はプレイをお控えください。
