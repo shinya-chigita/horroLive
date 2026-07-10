@@ -1,0 +1,20 @@
+{
+  "name": "LIVE — 配信型2Dホラーアドベンチャー",
+  "short_name": "LIVE",
+  "description": "廃病院からの生配信を生き延びる2Dホラーアドベンチャー。",
+  "lang": "ja",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#030303",
+  "theme_color": "#030303",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
