@@ -16,8 +16,11 @@ import {
   BookOpen,
   Camera,
   Home,
+  MessageSquareText,
   Radio,
   RotateCcw,
+  RotateCw,
+  X,
 } from 'lucide-react';
 import {
   Anomaly,
@@ -27,6 +30,7 @@ import {
   GameItem,
   GamePhase,
   PlayerState,
+  RiskTier,
 } from './types';
 import InvestigationJournal from './components/InvestigationJournal';
 import MainGameView from './components/MainGameView';
@@ -34,6 +38,19 @@ import LiveChatV2 from './components/LiveChatV2';
 import PipCameraV2 from './components/PipCameraV2';
 import StreamHeaderV2 from './components/StreamHeaderV2';
 import TitleScreenV2 from './components/TitleScreenV2';
+import {
+  createViewerRiskState,
+  getViewerBand,
+  transitionViewerRisk,
+  VIEWER_BANDS,
+  ViewerBand,
+} from './game/risk';
+import { canonicalSceneHistory } from './game/sceneSnapshot';
+import { CameraCaptureTarget } from './game/capture';
+import {
+  createAnomalyDirectorState,
+  isAnomalyResolved,
+} from './game/anomalyDirector';
 import { AudioSynth } from './utils/audio';
 
 const USER_NAMES = [
@@ -240,26 +257,95 @@ const startPositionForChapter = (chapterId: number) =>
 const uniqueId = (prefix: string) =>
   `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
+const mediaMatches = (query: string) =>
+  typeof window !== 'undefined' && window.matchMedia(query).matches;
+
+const FOCUSABLE_SELECTOR = [
+  'button:not([disabled])',
+  '[href]',
+  'input:not([disabled])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  '[tabindex]:not([tabindex="-1"])',
+].join(',');
+
+const getFocusableElements = (container: HTMLElement) =>
+  Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
+    (element) =>
+      !element.hasAttribute('inert') &&
+      !element.closest('[inert]') &&
+      element.getClientRects().length > 0,
+  );
+
+const trapDialogFocus = (event: React.KeyboardEvent<HTMLElement>) => {
+  if (event.key !== 'Tab') return;
+  const focusable = getFocusableElements(event.currentTarget);
+  if (focusable.length === 0) {
+    event.preventDefault();
+    event.currentTarget.focus({ preventScroll: true });
+    return;
+  }
+
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  const active = document.activeElement;
+  if (event.shiftKey && (active === first || !event.currentTarget.contains(active))) {
+    event.preventDefault();
+    last.focus({ preventScroll: true });
+  } else if (!event.shiftKey && active === last) {
+    event.preventDefault();
+    first.focus({ preventScroll: true });
+  }
+};
+
+const createInitialViewerRisk = () =>
+  transitionViewerRisk(createViewerRiskState('chapter-1'), {
+    viewerCount: getViewerBand(0),
+  }).state;
+
 export default function AppV2() {
   const [phase, setPhase] = useState<GamePhase>('TITLE');
   const [chapterId, setChapterId] = useState(1);
-  const [viewerCount, setViewerCount] = useState(237);
+  const [viewerRisk, setViewerRisk] = useState(createInitialViewerRisk);
   const [isMuted, setIsMuted] = useState(false);
   const [introStep, setIntroStep] = useState(0);
   const [endingType, setEndingType] = useState<EndingType>('ESCAPED');
   const [showChapterCard, setShowChapterCard] = useState(false);
+  const [showObjective, setShowObjective] = useState(false);
+  const [isJournalOpen, setIsJournalOpen] = useState(false);
+  const [isChatOpen, setIsChatOpen] = useState(false);
+  const [isPageHidden, setIsPageHidden] = useState(false);
+  const [isRotateHintDismissed, setIsRotateHintDismissed] = useState(false);
+  const [isCompactViewport, setIsCompactViewport] = useState(() =>
+    mediaMatches('(max-width: 1179px)'),
+  );
+  const [isPortraitGameplay, setIsPortraitGameplay] = useState(() =>
+    mediaMatches('(orientation: portrait) and (max-width: 767px)'),
+  );
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(() =>
+    mediaMatches('(prefers-reduced-motion: reduce)'),
+  );
 
   const [player, setPlayer] = useState<PlayerState>({ ...INITIAL_PLAYER });
   const [items, setItems] = useState<GameItem[]>(createInitialItems);
   const [anomalies, setAnomalies] = useState<Anomaly[]>(createInitialAnomalies);
   const [logs, setLogs] = useState<string[]>([...INITIAL_LOGS]);
   const [comments, setComments] = useState<Comment[]>(createInitialComments);
+  const viewerCount = viewerRisk.viewerCount;
+  const riskTier = viewerRisk.tier;
+  const shouldShowRotateHint =
+    phase === 'PLAYING' && isPortraitGameplay && !isRotateHintDismissed;
+  const isInterfacePaused =
+    isJournalOpen || isChatOpen || isPageHidden || shouldShowRotateHint;
 
   const playerRef = useRef(player);
   const itemsRef = useRef(items);
   const anomaliesRef = useRef(anomalies);
   const chapterRef = useRef(chapterId);
   const viewerRef = useRef(viewerCount);
+  const riskTierRef = useRef(riskTier);
+  const latestPipTargetRef = useRef<CameraCaptureTarget | null>(null);
+  const announcedRiskBandsRef = useRef(new Set<string>());
   const nearestRef = useRef<{ anomaly: Anomaly | null; distance: number }>({
     anomaly: null,
     distance: Number.POSITIVE_INFINITY,
@@ -267,12 +353,18 @@ export default function AppV2() {
   const transitionGuardRef = useRef<number | null>(null);
   const emptyBatteryLoggedRef = useRef(false);
   const gameOverTriggeredRef = useRef(false);
+  const journalDialogRef = useRef<HTMLDivElement | null>(null);
+  const chatDialogRef = useRef<HTMLDivElement | null>(null);
+  const rotateDialogRef = useRef<HTMLElement | null>(null);
+  const journalReturnFocusRef = useRef<HTMLElement | null>(null);
+  const chatReturnFocusRef = useRef<HTMLElement | null>(null);
 
   const nearest = useMemo(() => {
     let anomaly: Anomaly | null = null;
     let distance = Number.POSITIVE_INFINITY;
 
     for (const candidate of anomalies) {
+      if (isAnomalyResolved(candidate)) continue;
       const nextDistance = Math.abs(player.x - candidate.x);
       if (nextDistance < distance) {
         anomaly = candidate;
@@ -298,11 +390,21 @@ export default function AppV2() {
   useEffect(() => {
     chapterRef.current = chapterId;
     transitionGuardRef.current = null;
+    setViewerRisk((current) =>
+      transitionViewerRisk(current, {
+        chapterId: `chapter-${chapterId}`,
+        viewerCount: current.viewerCount,
+      }).state,
+    );
   }, [chapterId]);
 
   useEffect(() => {
     viewerRef.current = viewerCount;
   }, [viewerCount]);
+
+  useEffect(() => {
+    riskTierRef.current = riskTier;
+  }, [riskTier]);
 
   useEffect(() => {
     nearestRef.current = nearest;
@@ -315,7 +417,10 @@ export default function AppV2() {
   const pushComment = useCallback(
     (comment: Omit<Comment, 'id' | 'timestamp'>) => {
       setComments((previous) => [
-        ...previous.slice(-59),
+        // Keep the session transcript intact. LiveChat virtualises the visible
+        // window while following; retaining rows prevents paused reading from
+        // jumping when older comments would otherwise be pruned.
+        ...previous,
         {
           ...comment,
           id: uniqueId('chat'),
@@ -326,24 +431,22 @@ export default function AppV2() {
     [],
   );
 
-  const handleAddComment = useCallback(
-    (text: string, isPlayer: boolean) => {
-      pushComment({
-        username: isPlayer ? 'STREAMER' : 'anonymous',
-        text,
-        type: 'normal',
-      });
-    },
-    [pushComment],
-  );
+  const advanceViewerRisk = useCallback(() => {
+    setViewerRisk((current) => {
+      const nextTier = Math.min(3, current.tier + 1) as RiskTier;
+      return transitionViewerRisk(current, {
+        viewerCount: getViewerBand(nextTier),
+      }).state;
+    });
+  }, []);
 
   useEffect(() => {
-    if (phase !== 'PLAYING') return undefined;
+    if (phase !== 'PLAYING' || isInterfacePaused) return undefined;
 
     let timerId = 0;
 
     const schedule = () => {
-      const delay = 1450 + Math.random() * 1350;
+      const delay = 2000 + Math.random() * 2000;
       timerId = window.setTimeout(emitComment, delay);
     };
 
@@ -411,7 +514,7 @@ export default function AppV2() {
         text = lines[Math.floor(Math.random() * lines.length)];
       }
 
-      if (currentChapter >= 4 && Math.random() < 0.32) {
+      if ((riskTier >= 3 || currentChapter >= 4) && Math.random() < 0.32) {
         const lines = [
           'L I V E は 終 わ ら な い',
           'おまえの部屋も映ってる',
@@ -425,14 +528,6 @@ export default function AppV2() {
 
       pushComment({ username: user, text, type, badge });
 
-      const tensionBoost = 1 + currentPlayer.tension / 180;
-      const chapterBoost = 1 + currentChapter * 0.35;
-      const growth = Math.max(
-        8,
-        Math.round((10 + Math.random() * 34) * tensionBoost * chapterBoost),
-      );
-      setViewerCount((previous) => previous + growth);
-
       if (type !== 'glitch' && Math.random() < 0.22) {
         AudioSynth.playNotification();
       }
@@ -442,10 +537,62 @@ export default function AppV2() {
 
     schedule();
     return () => window.clearTimeout(timerId);
-  }, [phase, pushComment]);
+  }, [isInterfacePaused, phase, pushComment, riskTier]);
 
   useEffect(() => {
-    if (phase !== 'PLAYING') return undefined;
+    if (phase !== 'PLAYING') return;
+
+    const cues: Record<ViewerBand, { username: string; text: string; log: string }> = {
+      237: {
+        username: 'SYSTEM_LIVE',
+        text: '同時視聴 237。映像と現場音声の同期を確認しています。',
+        log: '視聴者数が237人に到達。遠方の不一致監視を開始した。',
+      },
+      2_370: {
+        username: 'nanashi',
+        text: '右上だけ見て。さっきまで、あそこには誰もいなかった。',
+        log: '視聴者数が2,370人に到達。PIPが未知の輪郭を検出した。',
+      },
+      23_700: {
+        username: 'uro_27',
+        text: '止まって。後ろの距離が、肉眼とカメラで合ってない。',
+        log: '視聴者数が23,700人に到達。映像遅延が不規則に増幅している。',
+      },
+      237_000: {
+        username: 'SYSTEM_237000',
+        text: '配信者を退出させました。視聴者は、もう中にいます。',
+        log: '視聴者数が237,000人に到達。配信制御権が外部へ移行した。',
+      },
+    };
+
+    viewerRisk.firedBands.forEach((band) => {
+      const ledgerKey = `${viewerRisk.chapterId}:${band}`;
+      if (announcedRiskBandsRef.current.has(ledgerKey)) return;
+      announcedRiskBandsRef.current.add(ledgerKey);
+
+      const cue = cues[band];
+      const tier = VIEWER_BANDS.indexOf(band) as RiskTier;
+      pushComment({
+        username: cue.username,
+        text: cue.text,
+        type: tier === 3 ? 'glitch' : tier === 0 ? 'system' : 'hint',
+      });
+      handleAddLog(`【RISK TIER ${tier}】${cue.log}`);
+      if (tier >= 2 && !prefersReducedMotion) AudioSynth.playGlitch();
+    });
+  }, [handleAddLog, phase, prefersReducedMotion, pushComment, viewerRisk]);
+
+  useEffect(() => {
+    const handleVisibility = () => {
+      setIsPageHidden(document.visibilityState !== 'visible');
+    };
+    handleVisibility();
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => document.removeEventListener('visibilitychange', handleVisibility);
+  }, []);
+
+  useEffect(() => {
+    if (phase !== 'PLAYING' || isInterfacePaused) return undefined;
 
     const timer = window.setInterval(() => {
       setPlayer((previous) => {
@@ -456,7 +603,7 @@ export default function AppV2() {
     }, 1000);
 
     return () => window.clearInterval(timer);
-  }, [phase]);
+  }, [isInterfacePaused, phase]);
 
   useEffect(() => {
     if (
@@ -475,7 +622,7 @@ export default function AppV2() {
   }, [phase, player.health]);
 
   useEffect(() => {
-    if (phase !== 'PLAYING') return;
+    if (phase !== 'PLAYING' || isInterfacePaused) return;
 
     if (player.battery <= 0) {
       if (player.flashlightOn) {
@@ -494,12 +641,26 @@ export default function AppV2() {
     } else if (player.battery > 3) {
       emptyBatteryLoggedRef.current = false;
     }
-  }, [handleAddLog, phase, player.battery, player.flashlightOn, pushComment]);
+  }, [handleAddLog, isInterfacePaused, phase, player.battery, player.flashlightOn, pushComment]);
 
   useEffect(() => {
     if (phase !== 'PLAYING') return undefined;
     setShowChapterCard(true);
-    const timer = window.setTimeout(() => setShowChapterCard(false), 1800);
+    const timer = window.setTimeout(
+      () => setShowChapterCard(false),
+      prefersReducedMotion ? 900 : 1800,
+    );
+    return () => window.clearTimeout(timer);
+  }, [chapterId, phase, prefersReducedMotion]);
+
+  useEffect(() => {
+    if (phase !== 'PLAYING') {
+      setShowObjective(false);
+      return undefined;
+    }
+
+    setShowObjective(true);
+    const timer = window.setTimeout(() => setShowObjective(false), 5000);
     return () => window.clearTimeout(timer);
   }, [chapterId, phase]);
 
@@ -511,21 +672,188 @@ export default function AppV2() {
     });
   }, []);
 
+  const suspendPlayerInput = useCallback(() => {
+    setPlayer((previous) => ({
+      ...previous,
+      isRunning: false,
+      isCrouching: false,
+    }));
+  }, []);
+
+  const restoreFocus = useCallback(
+    (returnFocusRef: { current: HTMLElement | null }) => {
+      const requestedTarget = returnFocusRef.current;
+      returnFocusRef.current = null;
+      window.requestAnimationFrame(() => {
+        const fallback = document.getElementById('main-game-viewport');
+        const target =
+          requestedTarget?.isConnected && requestedTarget.getClientRects().length > 0
+            ? requestedTarget
+            : fallback;
+        target?.focus({ preventScroll: true });
+      });
+    },
+    [],
+  );
+
+  const closeJournal = useCallback(() => {
+    setIsJournalOpen(false);
+    restoreFocus(journalReturnFocusRef);
+  }, [restoreFocus]);
+
+  const closeChat = useCallback(() => {
+    setIsChatOpen(false);
+    restoreFocus(chatReturnFocusRef);
+  }, [restoreFocus]);
+
+  const openJournal = useCallback(() => {
+    if (shouldShowRotateHint) return;
+    journalReturnFocusRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    suspendPlayerInput();
+    setIsChatOpen(false);
+    setIsJournalOpen(true);
+  }, [shouldShowRotateHint, suspendPlayerInput]);
+
+  const openChat = useCallback(() => {
+    if (!isCompactViewport || shouldShowRotateHint) return;
+    chatReturnFocusRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    suspendPlayerInput();
+    setIsJournalOpen(false);
+    setIsChatOpen(true);
+  }, [isCompactViewport, shouldShowRotateHint, suspendPlayerInput]);
+
+  const continueInPortrait = useCallback(() => {
+    setIsRotateHintDismissed(true);
+    window.requestAnimationFrame(() => {
+      document.getElementById('main-game-viewport')?.focus({ preventScroll: true });
+    });
+  }, []);
+
+  useEffect(() => {
+    const compactQuery = window.matchMedia('(max-width: 1179px)');
+    const portraitQuery = window.matchMedia(
+      '(orientation: portrait) and (max-width: 767px)',
+    );
+    const reducedMotionQuery = window.matchMedia(
+      '(prefers-reduced-motion: reduce)',
+    );
+
+    const syncCompact = () => setIsCompactViewport(compactQuery.matches);
+    const syncPortrait = () => setIsPortraitGameplay(portraitQuery.matches);
+    const syncReducedMotion = () =>
+      setPrefersReducedMotion(reducedMotionQuery.matches);
+
+    syncCompact();
+    syncPortrait();
+    syncReducedMotion();
+    compactQuery.addEventListener('change', syncCompact);
+    portraitQuery.addEventListener('change', syncPortrait);
+    reducedMotionQuery.addEventListener('change', syncReducedMotion);
+    return () => {
+      compactQuery.removeEventListener('change', syncCompact);
+      portraitQuery.removeEventListener('change', syncPortrait);
+      reducedMotionQuery.removeEventListener('change', syncReducedMotion);
+    };
+  }, []);
+
+  useEffect(() => {
+    const active = phase === 'PLAYING';
+    document.documentElement.classList.toggle('gameplay-active', active);
+    document.body.classList.toggle('gameplay-active', active);
+    return () => {
+      document.documentElement.classList.remove('gameplay-active');
+      document.body.classList.remove('gameplay-active');
+    };
+  }, [phase]);
+
+  useEffect(() => {
+    if (!shouldShowRotateHint) return undefined;
+    const frame = window.requestAnimationFrame(() => {
+      const dialog = rotateDialogRef.current;
+      const initialTarget = dialog ? getFocusableElements(dialog)[0] : null;
+      (initialTarget ?? dialog)?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [shouldShowRotateHint]);
+
+  useEffect(() => {
+    if (!isCompactViewport && isChatOpen) closeChat();
+  }, [closeChat, isChatOpen, isCompactViewport]);
+
+  useEffect(() => {
+    if (!isJournalOpen) return undefined;
+    const frame = window.requestAnimationFrame(() => {
+      const dialog = journalDialogRef.current;
+      const initialTarget = dialog ? getFocusableElements(dialog)[0] : null;
+      (initialTarget ?? dialog)?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [isJournalOpen]);
+
+  useEffect(() => {
+    if (!isChatOpen || !isCompactViewport) return undefined;
+    const frame = window.requestAnimationFrame(() => {
+      const dialog = chatDialogRef.current;
+      const initialTarget = dialog ? getFocusableElements(dialog)[0] : null;
+      (initialTarget ?? dialog)?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [isChatOpen, isCompactViewport]);
+
+  useEffect(() => {
+    if (!isJournalOpen && !isChatOpen && !shouldShowRotateHint) return undefined;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (shouldShowRotateHint) continueInPortrait();
+      else if (isJournalOpen) closeJournal();
+      else closeChat();
+    };
+
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, [
+    closeChat,
+    closeJournal,
+    continueInPortrait,
+    isChatOpen,
+    isJournalOpen,
+    shouldShowRotateHint,
+  ]);
+
   const handleTriggerScare = useCallback(
     (type: 'jumpscare' | 'chase' | 'whisper') => {
-      AudioSynth.playStinger();
-      AudioSynth.playGlitch();
+      if (prefersReducedMotion) {
+        AudioSynth.playNotification();
+      } else {
+        AudioSynth.playStinger();
+        AudioSynth.playGlitch();
+      }
 
       setPlayer((previous) => {
-        if (type === 'chase') return { ...previous, tension: Math.max(95, previous.tension) };
-        const increase = type === 'jumpscare' ? 35 : 15;
+        if (type === 'chase') {
+          return {
+            ...previous,
+            tension: Math.max(
+              prefersReducedMotion ? 84 : 95,
+              previous.tension,
+            ),
+          };
+        }
+        const increase = type === 'jumpscare'
+          ? prefersReducedMotion ? 20 : 35
+          : prefersReducedMotion ? 9 : 15;
         return {
           ...previous,
           tension: Math.min(100, previous.tension + increase),
         };
       });
     },
-    [],
+    [prefersReducedMotion],
   );
 
   const handlePickupItem = useCallback(
@@ -540,7 +868,6 @@ export default function AppV2() {
       );
       AudioSynth.playCaptureSuccess();
       handleAddLog(`【証拠回収】「${item.name}」を記録した。`);
-      setViewerCount((previous) => previous + 5000);
       pushComment({
         username: 'archive_watch',
         text: `その「${item.name}」、絶対に最後まで持っていって。`,
@@ -550,28 +877,46 @@ export default function AppV2() {
     [handleAddLog, pushComment],
   );
 
-  const handleCaptureAnomaly = useCallback(() => {
-    const currentNearest = nearestRef.current;
+  const handlePipTargetChange = useCallback(
+    (target: CameraCaptureTarget | null) => {
+      latestPipTargetRef.current = target;
+    },
+    [],
+  );
+
+  const handleCaptureAnomaly = useCallback((requestedTarget?: CameraCaptureTarget | null) => {
+    const captureDecision = requestedTarget ?? latestPipTargetRef.current;
     const currentPlayer = playerRef.current;
-    const target = currentNearest.anomaly;
+    const target = captureDecision?.targetId
+      ? anomaliesRef.current.find(
+          (candidate) => candidate.id === captureDecision.targetId,
+        ) ?? null
+      : null;
 
     if (
       target &&
-      currentNearest.distance < 350 &&
+      captureDecision?.canCapture &&
       !target.captured &&
-      currentPlayer.flashlightOn &&
+      !target.resolution &&
+      (!target.visibleOnlyInPip || riskTierRef.current >= 1) &&
       currentPlayer.battery > 0
     ) {
       setAnomalies((previous) =>
-        previous.map((candidate) =>
-          candidate.id === target.id ? { ...candidate, captured: true } : candidate,
-        ),
+        {
+          const next = previous.map((candidate) =>
+            candidate.id === target.id
+              ? { ...candidate, captured: true, resolution: 'RECORDED' as const }
+              : candidate,
+          );
+          anomaliesRef.current = next;
+          return next;
+        },
       );
       AudioSynth.playCaptureSuccess();
-      AudioSynth.playGlitch();
-      setViewerCount((previous) => previous + target.points);
+      if (!prefersReducedMotion) AudioSynth.playGlitch();
+      advanceViewerRisk();
       handleAddLog(
-        `【REC成功】${target.description} を記録した。 +${target.points.toLocaleString()} viewers`,
+        `【CAPTURE成功】${target.description} を記録した。配信の注目度が上昇した。`,
       );
       pushComment({
         username: 'mod_taku',
@@ -579,12 +924,40 @@ export default function AppV2() {
         type: 'hype',
         badge: 'mod',
       });
-      return;
+      return true;
     }
 
+    setPlayer((previous) => {
+      const next = {
+        ...previous,
+        battery: Math.max(0, previous.battery - 4),
+        tension: Math.min(100, previous.tension + 6),
+      };
+      playerRef.current = next;
+      return next;
+    });
+    const reasonCopy: Partial<Record<CameraCaptureTarget['reason'], string>> = {
+      NO_TARGET: '何もいない所を撮ってる。今のノイズ、増えたぞ。',
+      OUT_OF_FRAME: '中央から外れてる。右上の照準を見て。',
+      OUT_OF_RANGE: '遠すぎる。近づくなら走らないほうがいい。',
+      FLASHLIGHT_OFF: '真っ暗でピントが拾えてない。ライトを点けて。',
+      RISK_LOCKED: 'まだ輪郭だけだ。カメラが対象として認識してない。',
+      RESOLVED: 'その映像はもう記録済みだ。電池を無駄にするな。',
+      BATTERY_EMPTY: 'カメラ電池が空だ。撮影できてない。',
+    };
     AudioSynth.playNotification();
-    handleAddLog('【REC失敗】対象を中央に捉え、ライトを点けて十分近づく必要がある。');
-  }, [handleAddLog, pushComment]);
+    handleAddLog(
+      `【FOCUS LOST】撮影失敗。カメラ電池 -4。${captureDecision?.reason ?? 'NO_TARGET'}`,
+    );
+    pushComment({
+      username: 'baka_camera',
+      text:
+        reasonCopy[captureDecision?.reason ?? 'NO_TARGET'] ??
+        '今のは違う。対象を中央に捉えてから記録して。',
+      type: 'hint',
+    });
+    return false;
+  }, [advanceViewerRisk, handleAddLog, prefersReducedMotion, pushComment]);
 
   const resolveEnding = useCallback(() => {
     const totalFound = itemsRef.current.filter((item) => item.found).length;
@@ -645,11 +1018,45 @@ export default function AppV2() {
 
   const handleRetry = useCallback(() => {
     const currentChapter = chapterRef.current;
+    canonicalSceneHistory.clear();
+    latestPipTargetRef.current = null;
     setPlayer({
       ...INITIAL_PLAYER,
       x: Math.max(10, startPositionForChapter(currentChapter) + 20),
     });
+    setAnomalies((previous) => {
+      const next = previous.map((anomaly) => {
+        const resetState = createAnomalyDirectorState(anomaly.id, 0);
+        if (!isAnomalyResolved(anomaly)) {
+          return {
+            ...anomaly,
+            directorState: resetState,
+            resolution: null,
+          };
+        }
+
+        const resolution =
+          anomaly.resolution ??
+          anomaly.directorState?.resolution ??
+          (anomaly.captured ? 'RECORDED' : 'IGNORED');
+        return {
+          ...anomaly,
+          resolution,
+          directorState: {
+            ...resetState,
+            phase: 'COMPLETE' as const,
+            resolution,
+            transitionCount:
+              (anomaly.directorState?.transitionCount ?? 0) + 1,
+          },
+        };
+      });
+      anomaliesRef.current = next;
+      return next;
+    });
     gameOverTriggeredRef.current = false;
+    setIsJournalOpen(false);
+    setIsChatOpen(false);
     setPhase('PLAYING');
     handleAddLog('【RECONNECT】直前のセーフドアから配信を再接続した。');
     pushComment({
@@ -661,8 +1068,11 @@ export default function AppV2() {
   }, [handleAddLog, pushComment]);
 
   const resetAll = useCallback((nextPhase: GamePhase = 'TITLE') => {
+    canonicalSceneHistory.clear();
+    latestPipTargetRef.current = null;
+    announcedRiskBandsRef.current.clear();
     setChapterId(1);
-    setViewerCount(237);
+    setViewerRisk(createInitialViewerRisk());
     setPlayer({ ...INITIAL_PLAYER });
     setItems(createInitialItems());
     setAnomalies(createInitialAnomalies());
@@ -670,6 +1080,10 @@ export default function AppV2() {
     setComments(createInitialComments());
     setIntroStep(0);
     setEndingType('ESCAPED');
+    setIsJournalOpen(false);
+    setIsChatOpen(false);
+    setShowObjective(false);
+    setIsRotateHintDismissed(false);
     setIsMuted(false);
     AudioSynth.setMuted(false);
     setPhase(nextPhase);
@@ -702,13 +1116,6 @@ export default function AppV2() {
 
   const progress = Math.min(1, Math.max(0, player.x / 5000));
   const signalBlocked = player.tension > 82;
-  const canCapture = Boolean(
-    nearest.anomaly &&
-      nearest.distance < 350 &&
-      !nearest.anomaly.captured &&
-      player.flashlightOn &&
-      player.battery > 0,
-  );
 
   const endingCopy = {
     LOST_ARCHIVE: {
@@ -729,7 +1136,10 @@ export default function AppV2() {
   }[endingType];
 
   return (
-    <div className="min-h-screen overflow-x-hidden bg-[#050505] text-zinc-100 selection:bg-red-600/40 selection:text-white">
+    <div
+      className={`${phase === 'PLAYING' ? 'h-dvh overflow-hidden' : 'min-h-screen overflow-x-hidden'} bg-[#050505] text-zinc-100 selection:bg-red-600/40 selection:text-white`}
+      data-reduced-motion={prefersReducedMotion ? 'true' : 'false'}
+    >
       <div className="pointer-events-none fixed inset-0 broadcast-grid opacity-35" />
       <div className="pointer-events-none fixed inset-0 ambient-vignette" />
       <div className="pointer-events-none fixed inset-0 noise-layer opacity-[0.035]" />
@@ -741,15 +1151,11 @@ export default function AppV2() {
       {phase === 'INTRO_STORY' && (
         <section className="fixed inset-0 z-50 flex items-center justify-center overflow-hidden bg-[#050505] p-5 md:p-8">
           <div className="pointer-events-none absolute inset-0 broadcast-grid opacity-40" />
-          <div className="pointer-events-none absolute left-1/2 top-1/2 h-[520px] w-[520px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-red-950/20 blur-[110px]" />
-          <div className="screen-frame relative w-full max-w-2xl overflow-hidden rounded-[24px] border border-white/10 bg-[#08080a]/95 p-5 shadow-[0_40px_120px_rgba(0,0,0,0.9)] md:p-8">
+          <div className="screen-frame transmission-panel intro-panel relative max-h-full w-full max-w-2xl overflow-y-auto border border-[#242824] bg-[#060806] p-5 md:p-8">
             <div className="signal-sweep pointer-events-none absolute inset-x-0 top-0 h-px" />
             <header className="flex items-center justify-between border-b border-white/8 pb-4">
               <div className="flex items-center gap-3">
-                <span className="relative flex h-2.5 w-2.5">
-                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-500 opacity-60" />
-                  <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-red-600" />
-                </span>
+                <span className="h-2 w-2 bg-red-800" />
                 <div>
                   <p className="font-mono text-[9px] font-bold uppercase tracking-[0.28em] text-red-400">
                     pre-stream transmission
@@ -764,7 +1170,7 @@ export default function AppV2() {
               </span>
             </header>
 
-            <div className="flex min-h-[250px] items-center py-10 md:min-h-[300px] md:px-7">
+            <div className="intro-copy flex min-h-[250px] items-center py-10 md:min-h-[300px] md:px-7">
               <p className="font-serif text-lg font-semibold leading-[2] tracking-[0.04em] text-zinc-100 md:text-2xl">
                 {INTRO_TEXTS[introStep].text}
               </p>
@@ -774,8 +1180,8 @@ export default function AppV2() {
               {INTRO_TEXTS.map((item, index) => (
                 <span
                   key={item.label}
-                  className={`h-1 flex-1 rounded-full transition-colors duration-500 ${
-                    index <= introStep ? 'bg-red-600' : 'bg-white/8'
+                  className={`h-px flex-1 transition-colors duration-500 ${
+                    index <= introStep ? 'bg-red-800' : 'bg-white/8'
                   }`}
                 />
               ))}
@@ -785,14 +1191,14 @@ export default function AppV2() {
               <button
                 type="button"
                 onClick={() => setPhase('PLAYING')}
-                className="rounded-lg px-3 py-2 text-left font-mono text-[9px] uppercase tracking-[0.2em] text-zinc-600 transition hover:text-zinc-300"
+                className="min-h-11 border border-transparent px-3 py-2 text-left font-mono text-[9px] uppercase tracking-[0.2em] text-zinc-600 transition hover:border-white/10 hover:text-zinc-300"
               >
                 skip briefing
               </button>
               <button
                 type="button"
                 onClick={advanceIntro}
-                className="group inline-flex items-center justify-center gap-3 rounded-xl bg-red-600 px-6 py-3 text-[11px] font-black tracking-[0.18em] text-white shadow-[0_12px_35px_rgba(220,38,38,0.25)] transition hover:bg-red-500 active:scale-[0.98]"
+                className="group inline-flex min-h-11 items-center justify-center gap-3 border border-red-900 bg-[#0b0808] px-6 py-3 text-[10px] font-semibold tracking-[0.18em] text-zinc-200 transition hover:border-red-700 hover:bg-red-950/25 active:translate-y-px"
               >
                 {introStep < INTRO_TEXTS.length - 1 ? 'NEXT TRANSMISSION' : 'GO LIVE'}
                 <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
@@ -803,7 +1209,7 @@ export default function AppV2() {
       )}
 
       {phase === 'PLAYING' && (
-        <div className="relative z-10 flex min-h-screen flex-col">
+        <div className="playing-shell relative z-10">
           <StreamHeaderV2
             viewerCount={viewerCount}
             battery={Math.ceil(player.battery)}
@@ -816,35 +1222,39 @@ export default function AppV2() {
             progress={progress}
             onToggleMute={handleToggleMute}
             isMuted={isMuted}
+            onOpenJournal={openJournal}
+            onOpenChat={openChat}
+            onShowObjective={() => setShowObjective(true)}
+            isInert={isJournalOpen || isChatOpen || shouldShowRotateHint}
           />
 
-          <div className="mx-auto flex w-full max-w-[1500px] flex-1 flex-col gap-3 px-3 py-3 sm:px-5 sm:py-5">
-            <section className="screen-frame flex flex-col gap-3 rounded-xl border border-white/8 bg-black/35 px-4 py-3 backdrop-blur-md md:flex-row md:items-center md:justify-between">
-              <div className="flex items-start gap-3">
-                <Radio className="mt-0.5 h-4 w-4 shrink-0 text-red-500" />
-                <div>
-                  <p className="font-mono text-[9px] font-black uppercase tracking-[0.22em] text-red-400">
-                    current objective
-                  </p>
-                  <p className="mt-1 text-xs font-semibold text-zinc-200">
-                    {CHAPTERS[chapterId - 1].description}
-                  </p>
-                </div>
-              </div>
-              <div className="flex flex-wrap items-center gap-x-5 gap-y-2 font-mono text-[9px] uppercase tracking-[0.12em] text-zinc-500">
-                <span className="flex items-center gap-1.5">
-                  <Camera className="h-3.5 w-3.5 text-cyan-500" />
-                  REC {anomalies.filter((anomaly) => anomaly.captured).length}/{anomalies.length}
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <BookOpen className="h-3.5 w-3.5 text-amber-500" />
-                  CLUES {items.filter((item) => item.found).length}/{items.length}
-                </span>
-              </div>
-            </section>
+          {shouldShowRotateHint && (
+            <aside
+              ref={rotateDialogRef}
+              className="rotate-recommendation"
+              role="dialog"
+              aria-modal="true"
+              aria-label="横画面でのプレイを推奨"
+              tabIndex={-1}
+              onKeyDown={trapDialogFocus}
+            >
+              <RotateCw aria-hidden="true" />
+              <span>横画面でのプレイを推奨します</span>
+              <button type="button" onClick={continueInPortrait}>
+                縦画面で続ける
+              </button>
+            </aside>
+          )}
 
-            <main className="grid flex-1 grid-cols-1 gap-4 xl:grid-cols-[minmax(0,3fr)_minmax(290px,1fr)]">
-              <div className="flex min-w-0 flex-col gap-4">
+          <main
+            className="playing-layout"
+            inert={isJournalOpen || shouldShowRotateHint ? true : undefined}
+          >
+            <div
+              className="playing-main"
+              inert={isChatOpen ? true : undefined}
+            >
+              <div className="playing-world">
                 <MainGameView
                   player={player}
                   setPlayer={setPlayer}
@@ -857,42 +1267,117 @@ export default function AppV2() {
                   currentChapterId={chapterId}
                   onChapterComplete={handleChapterComplete}
                   onCaptureAnomaly={handleCaptureAnomaly}
+                  isPaused={isInterfacePaused}
                 />
 
-                <div className="min-h-[230px] flex-1">
-                  <InvestigationJournal items={items} anomalies={anomalies} logs={logs} />
-                </div>
+                {showObjective && (
+                  <section className="current-objective" aria-label="現在の目的">
+                    <div>
+                      <p><Radio aria-hidden="true" /> CURRENT OBJECTIVE</p>
+                      <strong>{CHAPTERS[chapterId - 1].description}</strong>
+                    </div>
+                    <div className="objective-evidence" aria-label="記録状況">
+                      <span><Camera aria-hidden="true" /> {anomalies.filter((anomaly) => anomaly.captured).length}/{anomalies.length}</span>
+                      <span><BookOpen aria-hidden="true" /> {items.filter((item) => item.found).length}/{items.length}</span>
+                    </div>
+                    <button type="button" onClick={() => setShowObjective(false)} aria-label="目的表示を閉じる">
+                      <X aria-hidden="true" />
+                    </button>
+                  </section>
+                )}
               </div>
 
-              <aside className="grid min-h-[620px] grid-rows-[auto_minmax(330px,1fr)] gap-4 xl:min-h-0">
+              {showChapterCard && (
+                <div className="playing-chapter-toast">
+                  <p>CHECKPOINT {chapterId}/{CHAPTERS.length}</p>
+                  <strong>{CHAPTERS[chapterId - 1].subtitle}</strong>
+                </div>
+              )}
+            </div>
+
+            <aside className={`playing-rail ${isChatOpen ? 'chat-open' : ''}`} aria-label="配信補助画面">
+              <div
+                className="pip-slot"
+                inert={isChatOpen ? true : undefined}
+              >
                 <PipCameraV2
                   currentAnomaly={nearest.anomaly}
                   anomalyDistance={nearest.distance}
                   tension={player.tension}
                   flashlightOn={player.flashlightOn && player.battery > 0}
                   onCaptureAnomaly={handleCaptureAnomaly}
-                  canCapture={canCapture}
+                  onTargetChange={handlePipTargetChange}
+                  player={player}
+                  anomalies={anomalies}
+                  items={items}
+                  riskTier={riskTier}
+                  reducedMotion={prefersReducedMotion}
                 />
+              </div>
+
+              <button
+                type="button"
+                className="compact-drawer-scrim"
+                onClick={closeChat}
+                aria-label="コメント欄を閉じる"
+                aria-hidden="true"
+                tabIndex={-1}
+              />
+
+              <div
+                ref={chatDialogRef}
+                className="chat-slot"
+                role={isCompactViewport ? 'dialog' : 'region'}
+                aria-modal={isCompactViewport && isChatOpen ? true : undefined}
+                aria-hidden={isCompactViewport && !isChatOpen ? true : undefined}
+                aria-label="ライブコメント"
+                inert={isCompactViewport && !isChatOpen ? true : undefined}
+                tabIndex={isCompactViewport && isChatOpen ? -1 : undefined}
+                onKeyDown={isCompactViewport && isChatOpen ? trapDialogFocus : undefined}
+              >
+                <button
+                  type="button"
+                  className="compact-panel-close"
+                  onClick={closeChat}
+                  aria-label="コメント欄を閉じる"
+                  title="閉じる (Esc)"
+                  tabIndex={isCompactViewport && isChatOpen ? 0 : -1}
+                >
+                  <MessageSquareText aria-hidden="true" />
+                  <span>LIVE CHAT</span>
+                  <X aria-hidden="true" />
+                </button>
                 <LiveChatV2
                   comments={comments}
-                  onAddComment={handleAddComment}
                   signalBlocked={signalBlocked}
                   flashlightOn={player.flashlightOn && player.battery > 0}
                   isRunning={player.isRunning}
+                  readOnly
                 />
-              </aside>
-            </main>
-          </div>
+              </div>
+            </aside>
+          </main>
 
-          {showChapterCard && (
-            <div className="pointer-events-none fixed inset-x-0 top-28 z-40 flex justify-center px-4">
-              <div className="chapter-toast rounded-xl border border-red-500/25 bg-black/85 px-6 py-4 text-center shadow-[0_18px_60px_rgba(0,0,0,0.8)] backdrop-blur-xl">
-                <p className="font-mono text-[9px] font-bold uppercase tracking-[0.28em] text-red-400">
-                  checkpoint {chapterId}/{CHAPTERS.length}
-                </p>
-                <p className="mt-1 text-sm font-black tracking-wide text-white">
-                  {CHAPTERS[chapterId - 1].subtitle}
-                </p>
+          {isJournalOpen && (
+            <div
+              ref={journalDialogRef}
+              className="journal-overlay"
+              role="dialog"
+              aria-modal="true"
+              aria-label="調査記録"
+              tabIndex={-1}
+              onKeyDown={trapDialogFocus}
+              onMouseDown={(event) => {
+                if (event.currentTarget === event.target) closeJournal();
+              }}
+            >
+              <div className="journal-drawer">
+                <InvestigationJournal
+                  items={items}
+                  anomalies={anomalies}
+                  logs={logs}
+                  onClose={closeJournal}
+                />
               </div>
             </div>
           )}
@@ -902,8 +1387,7 @@ export default function AppV2() {
       {phase === 'ENDING' && (
         <section className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-[#040404] p-5 md:p-8">
           <div className="pointer-events-none absolute inset-0 broadcast-grid opacity-35" />
-          <div className="pointer-events-none absolute left-1/2 top-1/2 h-[600px] w-[600px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-red-950/20 blur-[130px]" />
-          <div className="screen-frame relative w-full max-w-2xl overflow-hidden rounded-[26px] border border-white/10 bg-[#08080a]/95 p-6 shadow-[0_45px_140px_rgba(0,0,0,0.95)] md:p-9">
+          <div className="screen-frame transmission-panel relative w-full max-w-2xl overflow-hidden border border-[#242824] bg-[#060806] p-6 md:p-9">
             <p className="font-mono text-[9px] font-black uppercase tracking-[0.28em] text-red-400">
               {endingCopy.code}
             </p>
@@ -914,7 +1398,7 @@ export default function AppV2() {
               {endingCopy.body}
             </p>
 
-            <div className="mt-8 grid grid-cols-3 gap-px overflow-hidden rounded-xl border border-white/8 bg-white/8">
+            <div className="mt-8 grid grid-cols-3 gap-px overflow-hidden border border-white/8 bg-white/8">
               {[
                 ['FINAL VIEWERS', viewerCount.toLocaleString()],
                 ['CLUES', `${items.filter((item) => item.found).length}/${items.length}`],
@@ -936,7 +1420,7 @@ export default function AppV2() {
               <button
                 type="button"
                 onClick={() => resetAll('INTRO_STORY')}
-                className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-red-600 px-5 py-3 text-[10px] font-black uppercase tracking-[0.18em] text-white transition hover:bg-red-500 active:scale-[0.98]"
+                className="inline-flex min-h-11 flex-1 items-center justify-center gap-2 border border-red-900 bg-[#0b0808] px-5 py-3 text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-200 transition hover:border-red-700 hover:bg-red-950/25 active:translate-y-px"
               >
                 <RotateCcw className="h-4 w-4" />
                 stream again
@@ -944,7 +1428,7 @@ export default function AppV2() {
               <button
                 type="button"
                 onClick={() => resetAll('TITLE')}
-                className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-5 py-3 text-[10px] font-black uppercase tracking-[0.18em] text-zinc-400 transition hover:border-white/20 hover:text-white"
+                className="inline-flex min-h-11 items-center justify-center gap-2 border border-white/10 bg-black/30 px-5 py-3 text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-400 transition hover:border-white/20 hover:text-white"
               >
                 <Home className="h-4 w-4" />
                 title
@@ -955,10 +1439,10 @@ export default function AppV2() {
       )}
 
       {phase === 'GAMEOVER' && (
-        <section className="fixed inset-0 z-50 flex items-center justify-center overflow-hidden bg-black/90 p-5 backdrop-blur-md">
-          <div className="pointer-events-none absolute inset-0 bg-red-950/20" />
-          <div className="screen-frame relative w-full max-w-md overflow-hidden rounded-[24px] border border-red-900/50 bg-[#070708] p-7 text-center shadow-[0_35px_110px_rgba(0,0,0,0.95)]">
-            <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full border border-red-500/30 bg-red-950/30 text-red-500">
+        <section className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/94 p-5">
+          <div className="pointer-events-none absolute inset-0 broadcast-grid opacity-20" />
+          <div className="screen-frame transmission-panel resolution-panel relative w-full max-w-md overflow-hidden border border-red-950 bg-[#060706] p-7 text-center">
+            <div className="mx-auto flex h-14 w-14 items-center justify-center border border-red-900/60 bg-black text-red-700">
               <AlertCircle className="h-8 w-8" />
             </div>
             <p className="mt-6 font-mono text-[9px] font-black uppercase tracking-[0.3em] text-red-500">
@@ -971,7 +1455,7 @@ export default function AppV2() {
             <button
               type="button"
               onClick={handleRetry}
-              className="mt-7 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-red-600 px-5 py-3.5 text-[10px] font-black uppercase tracking-[0.18em] text-white transition hover:bg-red-500 active:scale-[0.98]"
+              className="mt-7 inline-flex min-h-11 w-full items-center justify-center gap-2 border border-red-900 bg-[#0b0808] px-5 py-3 text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-200 transition hover:border-red-700 hover:bg-red-950/25 active:translate-y-px"
             >
               <RotateCcw className="h-4 w-4" />
               reconnect from checkpoint

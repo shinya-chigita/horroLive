@@ -5,7 +5,21 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { ArrowLeft, ArrowRight, Camera, Flashlight, Search, Zap } from 'lucide-react';
-import { Anomaly, GameItem, PlayerState } from '../types';
+import { CHAPTERS } from '../types';
+import type {
+  Anomaly,
+  AnomalyDirectorPhase,
+  AnomalyDirectorState,
+  GameItem,
+  PlayerState,
+} from '../types';
+import {
+  advanceAnomalyDirector,
+  createAnomalyDirectorState,
+  getAnomalyRuntimeDefinition,
+  isAnomalyThreatening,
+} from '../game/anomalyDirector';
+import { getSceneDefinitionAt } from '../game/sceneDefinitions';
 import { AudioSynth } from '../utils/audio';
 import {
   ITEM_WORLD_POSITIONS,
@@ -18,7 +32,7 @@ interface MainGameViewProps {
   player: PlayerState;
   setPlayer: React.Dispatch<React.SetStateAction<PlayerState>>;
   anomalies: Anomaly[];
-  onAnomaliesUpdate: (updated: Anomaly[]) => void;
+  onAnomaliesUpdate: React.Dispatch<React.SetStateAction<Anomaly[]>>;
   items: GameItem[];
   onAddLog: (logText: string) => void;
   onPickupItem: (itemId: string) => void;
@@ -26,7 +40,19 @@ interface MainGameViewProps {
   currentChapterId: number;
   onChapterComplete: () => void;
   onCaptureAnomaly: () => void;
+  isPaused?: boolean;
 }
+
+const WORLD_END_POS = CHAPTERS[CHAPTERS.length - 1]?.endPos ?? 5000;
+
+const ENGAGED_PHASES: ReadonlySet<AnomalyDirectorPhase> = new Set([
+  'TELEGRAPH',
+  'ACTIVE',
+  'RECORDED',
+  'IGNORED',
+  'MISSED',
+  'AFTERMATH',
+]);
 
 const isTypingTarget = (target: EventTarget | null) => {
   if (!(target instanceof HTMLElement)) return false;
@@ -46,7 +72,7 @@ export default function MainGameView({
   player,
   setPlayer,
   anomalies,
-  onAnomaliesUpdate: _onAnomaliesUpdate,
+  onAnomaliesUpdate,
   items,
   onAddLog,
   onPickupItem,
@@ -54,6 +80,7 @@ export default function MainGameView({
   currentChapterId,
   onChapterComplete,
   onCaptureAnomaly,
+  isPaused = false,
 }: MainGameViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -62,10 +89,13 @@ export default function MainGameView({
   const playerRef = useRef(player);
   const itemsRef = useRef(items);
   const anomaliesRef = useRef(anomalies);
+  const updateAnomaliesRef = useRef(onAnomaliesUpdate);
+  const directorStatesRef = useRef<Record<string, AnomalyDirectorState>>({});
+  const simulationNowRef = useRef(0);
   const chapterRef = useRef(currentChapterId);
   const inspectRef = useRef<() => void>(() => undefined);
   const captureRef = useRef(onCaptureAnomaly);
-  const scareTriggered = useRef<Record<number, boolean>>({});
+  const pausedRef = useRef(isPaused);
   const [isFocused, setIsFocused] = useState(false);
 
   useEffect(() => {
@@ -77,7 +107,52 @@ export default function MainGameView({
   }, [items]);
 
   useEffect(() => {
-    anomaliesRef.current = anomalies;
+    updateAnomaliesRef.current = onAnomaliesUpdate;
+  }, [onAnomaliesUpdate]);
+
+  useEffect(() => {
+    let needsParentSync = false;
+    const nextStates: Record<string, AnomalyDirectorState> = {};
+    const hydrated = anomalies.map((anomaly) => {
+      const fallbackSceneId = getSceneDefinitionAt(anomaly.x).id;
+      const definition = getAnomalyRuntimeDefinition(anomaly.id, fallbackSceneId);
+      const stored = directorStatesRef.current[anomaly.id];
+      const incoming = anomaly.directorState;
+      const state =
+        incoming && (!stored || incoming.transitionCount > stored.transitionCount)
+          ? incoming
+          : stored ?? incoming ?? createAnomalyDirectorState(anomaly.id, simulationNowRef.current);
+      nextStates[anomaly.id] = state;
+      const resolution = state.resolution;
+      const sceneId = anomaly.sceneId ?? definition.sceneId;
+      if (
+        anomaly.sceneId !== sceneId ||
+        anomaly.directorState !== state ||
+        anomaly.resolution !== resolution
+      ) {
+        needsParentSync = true;
+        return { ...anomaly, sceneId, directorState: state, resolution };
+      }
+      return anomaly;
+    });
+
+    directorStatesRef.current = nextStates;
+    anomaliesRef.current = hydrated;
+
+    if (needsParentSync) {
+      updateAnomaliesRef.current((previous) =>
+        previous.map((anomaly) => {
+          const hydratedAnomaly = hydrated.find((candidate) => candidate.id === anomaly.id);
+          if (!hydratedAnomaly) return anomaly;
+          return {
+            ...anomaly,
+            sceneId: hydratedAnomaly.sceneId,
+            directorState: hydratedAnomaly.directorState,
+            resolution: hydratedAnomaly.resolution,
+          };
+        }),
+      );
+    }
   }, [anomalies]);
 
   useEffect(() => {
@@ -87,6 +162,11 @@ export default function MainGameView({
   useEffect(() => {
     captureRef.current = onCaptureAnomaly;
   }, [onCaptureAnomaly]);
+
+  useEffect(() => {
+    pausedRef.current = isPaused;
+    if (isPaused) clearKeys();
+  }, [isPaused]);
 
   const clearKeys = () => {
     keysPressed.current = {};
@@ -114,6 +194,7 @@ export default function MainGameView({
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (pausedRef.current) return;
       if (isTypingTarget(event.target)) return;
       const key = event.key.toLowerCase();
       setPressed(keysPressed, key, true);
@@ -172,12 +253,153 @@ export default function MainGameView({
     let previousAt = performance.now();
     let footstepDistance = 0;
 
+    const announceTransition = (
+      anomaly: Anomaly,
+      previous: AnomalyDirectorState,
+      next: AnomalyDirectorState,
+    ) => {
+      if (previous.phase === next.phase) return;
+      switch (next.phase) {
+        case 'TELEGRAPH':
+          onAddLog(`【予兆】${anomaly.description}の気配が、映像の端に混じった。`);
+          onTriggerScare('whisper');
+          break;
+        case 'ACTIVE':
+          onAddLog(`【異常検知】${anomaly.description}。今なら記録できる。`);
+          onTriggerScare(
+            anomaly.type === 'ghost' || anomaly.type === 'shadow'
+              ? 'jumpscare'
+              : 'whisper',
+          );
+          break;
+        case 'IGNORED':
+          onAddLog(`【見送り】${anomaly.description}を記録せず、その場を離れた。`);
+          break;
+        case 'MISSED':
+          onAddLog(`【記録失敗】${anomaly.description}の撮影可能時間を逃した。`);
+          break;
+      }
+    };
+
+    const mergeRuntimeState = (
+      anomaly: Anomaly,
+      states: Readonly<Record<string, AnomalyDirectorState>>,
+    ): Anomaly => {
+      const state = states[anomaly.id];
+      if (!state) return anomaly;
+      const fallbackSceneId = getSceneDefinitionAt(anomaly.x).id;
+      const definition = getAnomalyRuntimeDefinition(anomaly.id, fallbackSceneId);
+      const sceneId = anomaly.sceneId ?? definition.sceneId;
+      if (
+        anomaly.sceneId === sceneId &&
+        anomaly.directorState === state &&
+        anomaly.resolution === state.resolution
+      ) {
+        return anomaly;
+      }
+      return {
+        ...anomaly,
+        sceneId,
+        directorState: state,
+        resolution: state.resolution,
+      };
+    };
+
+    const commitRuntimeStates = (
+      states: Readonly<Record<string, AnomalyDirectorState>>,
+    ) => {
+      directorStatesRef.current = { ...states };
+      anomaliesRef.current = anomaliesRef.current.map((anomaly) =>
+        mergeRuntimeState(anomaly, states),
+      );
+      updateAnomaliesRef.current((previous) =>
+        previous.map((anomaly) => mergeRuntimeState(anomaly, states)),
+      );
+    };
+
+    const advanceRuntime = (nowMs: number, playerX: number) => {
+      const currentAnomalies = anomaliesRef.current;
+      const currentSceneId = getSceneDefinitionAt(playerX).id;
+      const nextStates = { ...directorStatesRef.current };
+      let changed = false;
+
+      const advanceOne = (anomaly: Anomaly) => {
+        const state = nextStates[anomaly.id];
+        if (!state) return;
+        const fallbackSceneId = anomaly.sceneId ?? getSceneDefinitionAt(anomaly.x).id;
+        const definition = getAnomalyRuntimeDefinition(anomaly.id, fallbackSceneId);
+        const next = advanceAnomalyDirector(state, definition, {
+          nowMs,
+          sceneId: currentSceneId,
+          distance: Math.abs(playerX - anomaly.x),
+          distancePast: playerX - anomaly.x,
+          captured: anomaly.captured,
+        });
+        if (next === state) return;
+        nextStates[anomaly.id] = next;
+        changed = true;
+        announceTransition(anomaly, state, next);
+      };
+
+      // Camera capture is owned by AppV2. Reconcile that external result before
+      // selecting the next event so it cannot race a timeout or leave state active.
+      currentAnomalies.forEach((anomaly) => {
+        const state = nextStates[anomaly.id];
+        if (anomaly.captured && state && state.resolution === null) advanceOne(anomaly);
+      });
+
+      const withRuntime = currentAnomalies.map((anomaly) =>
+        mergeRuntimeState(anomaly, nextStates),
+      );
+      const engaged = withRuntime.find((anomaly) => {
+        const phase = anomaly.directorState?.phase;
+        return phase ? ENGAGED_PHASES.has(phase) : false;
+      });
+
+      if (engaged) {
+        advanceOne(engaged);
+      } else {
+        const candidate = withRuntime
+          .filter((anomaly) => {
+            if (anomaly.captured || anomaly.directorState?.phase !== 'DORMANT') return false;
+            const fallbackSceneId = anomaly.sceneId ?? getSceneDefinitionAt(anomaly.x).id;
+            const definition = getAnomalyRuntimeDefinition(anomaly.id, fallbackSceneId);
+            return (
+              definition.sceneId === currentSceneId &&
+              Math.abs(playerX - anomaly.x) <= definition.telegraphDistance
+            );
+          })
+          .sort((left, right) => {
+            const leftDefinition = getAnomalyRuntimeDefinition(
+              left.id,
+              left.sceneId ?? getSceneDefinitionAt(left.x).id,
+            );
+            const rightDefinition = getAnomalyRuntimeDefinition(
+              right.id,
+              right.sceneId ?? getSceneDefinitionAt(right.x).id,
+            );
+            return (
+              rightDefinition.priority - leftDefinition.priority ||
+              Math.abs(playerX - left.x) - Math.abs(playerX - right.x)
+            );
+          })[0];
+        if (candidate) advanceOne(candidate);
+      }
+
+      if (changed) commitRuntimeStates(nextStates);
+    };
+
     const tick = (now: number) => {
       animationId = window.requestAnimationFrame(tick);
+      if (pausedRef.current) {
+        previousAt = now;
+        return;
+      }
       const elapsedMs = now - previousAt;
       if (elapsedMs < 28) return;
       const dt = Math.min(0.05, Math.max(0.001, elapsedMs / 1000));
       previousAt = now;
+      simulationNowRef.current += elapsedMs;
 
       const left = keysPressed.current.a || keysPressed.current.arrowleft;
       const right = keysPressed.current.d || keysPressed.current.arrowright;
@@ -190,7 +412,7 @@ export default function MainGameView({
       const direction = left === right ? 0 : left ? -1 : 1;
       const speed = crouch ? 48 : run ? 192 : 108;
       const deltaX = direction * speed * dt;
-      const nextX = Math.max(0, Math.min(5000, current.x + deltaX));
+      const nextX = Math.max(0, Math.min(WORLD_END_POS, current.x + deltaX));
       const isRunning = direction !== 0 && run && !crouch;
       const isCrouching = crouch;
 
@@ -214,9 +436,11 @@ export default function MainGameView({
         : 0;
       const nextBattery = Math.max(0, current.battery - drainPerSecond * dt);
 
+      advanceRuntime(simulationNowRef.current, nextX);
+
       let nearestDistance = Number.POSITIVE_INFINITY;
       for (const anomaly of anomaliesRef.current) {
-        if (!anomaly.captured) {
+        if (isAnomalyThreatening(anomaly)) {
           nearestDistance = Math.min(nearestDistance, Math.abs(nextX - anomaly.x));
         }
       }
@@ -242,28 +466,8 @@ export default function MainGameView({
       playerRef.current = next;
       setPlayer(next);
 
-      const chapter = chapterRef.current;
-      if (nextX >= 1200 && chapter === 1) onChapterComplete();
-      else if (nextX >= 2400 && chapter === 2) onChapterComplete();
-      else if (nextX >= 3600 && chapter === 3) onChapterComplete();
-      else if (nextX >= 4500 && chapter === 4) onChapterComplete();
-      else if (nextX >= 4980 && chapter === 5) onChapterComplete();
-
-      if (nextX > 500 && !scareTriggered.current[500]) {
-        scareTriggered.current[500] = true;
-        onTriggerScare('whisper');
-        onAddLog('左の病室から、配信者と同じ呼吸音が返ってきた。');
-      }
-      if (nextX > 1600 && !scareTriggered.current[1600]) {
-        scareTriggered.current[1600] = true;
-        onTriggerScare('jumpscare');
-        onAddLog('PIP映像だけが一瞬停止した。停止した画面では誰かが近づいている。');
-      }
-      if (nextX > 3800 && !scareTriggered.current[3800]) {
-        scareTriggered.current[3800] = true;
-        onTriggerScare('chase');
-        onAddLog('背後の足音が二歩ぶん増えた。立ち止まるな。');
-      }
+      const chapter = CHAPTERS.find((candidate) => candidate.id === chapterRef.current);
+      if (chapter && nextX >= chapter.endPos) onChapterComplete();
     };
 
     animationId = window.requestAnimationFrame(tick);
@@ -306,12 +510,36 @@ export default function MainGameView({
   }, []);
 
   const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (
+      event.target instanceof Element &&
+      event.target.closest('.mobile-game-controls')
+    ) {
+      return;
+    }
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
+    const fit = window.getComputedStyle(canvas).objectFit;
+    const scaleForWidth = rect.width / PIXEL_VIEW_WIDTH;
+    const scaleForHeight = rect.height / PIXEL_VIEW_HEIGHT;
+    const scale = fit === 'cover'
+      ? Math.max(scaleForWidth, scaleForHeight)
+      : Math.min(scaleForWidth, scaleForHeight);
+    const renderedWidth = PIXEL_VIEW_WIDTH * scale;
+    const renderedHeight = PIXEL_VIEW_HEIGHT * scale;
+    const offsetX = (rect.width - renderedWidth) / 2;
+    const offsetY = (rect.height - renderedHeight) / 2;
+    const localX = Math.max(
+      0,
+      Math.min(renderedWidth, event.clientX - rect.left - offsetX),
+    );
+    const localY = Math.max(
+      0,
+      Math.min(renderedHeight, event.clientY - rect.top - offsetY),
+    );
     mousePos.current = {
-      x: ((event.clientX - rect.left) / rect.width) * PIXEL_VIEW_WIDTH,
-      y: ((event.clientY - rect.top) / rect.height) * PIXEL_VIEW_HEIGHT,
+      x: localX / scale,
+      y: localY / scale,
     };
   };
 
@@ -367,7 +595,7 @@ export default function MainGameView({
       </div>
 
       <div className="pointer-events-none absolute right-3 top-3 border border-white/10 bg-black/72 px-2 py-1 font-mono text-[8px] uppercase tracking-[0.12em] text-zinc-600">
-        pos {Math.round(player.x).toString().padStart(4, '0')} / 5000
+        pos {Math.round(player.x).toString().padStart(4, '0')} / {WORLD_END_POS}
       </div>
 
       {!isFocused && (
@@ -384,7 +612,7 @@ export default function MainGameView({
         </div>
       )}
 
-      <div className="pointer-events-none absolute bottom-3 left-3 hidden items-end gap-1.5 md:flex">
+      <div className="pointer-events-none absolute bottom-3 left-3 hidden items-end gap-1.5 xl:flex">
         {[
           ['A / D', '移動'],
           ['SHIFT', '走る'],
@@ -398,7 +626,7 @@ export default function MainGameView({
         ))}
       </div>
 
-      <div className="absolute inset-x-3 bottom-3 z-20 flex items-end justify-between md:hidden">
+      <div className="mobile-game-controls absolute z-20 flex items-end justify-between xl:hidden">
         <div className="flex gap-2">
           <button
             type="button"
@@ -431,7 +659,7 @@ export default function MainGameView({
             onPointerUp={holdKey('shift', false)}
             onPointerCancel={holdKey('shift', false)}
             onPointerLeave={holdKey('shift', false)}
-            className="flex h-10 min-w-10 items-center justify-center border border-white/12 bg-black/76 px-2 text-zinc-400 active:text-white"
+            className="flex h-11 min-w-11 items-center justify-center border border-white/12 bg-black/76 px-2 text-zinc-400 active:text-white"
             aria-label="走る"
           >
             <Zap className="h-3.5 w-3.5" />
@@ -439,7 +667,7 @@ export default function MainGameView({
           <button
             type="button"
             onClick={toggleFlashlight}
-            className="flex h-10 min-w-10 items-center justify-center border border-white/12 bg-black/76 px-2 text-zinc-400 active:text-white"
+            className="flex h-11 min-w-11 items-center justify-center border border-white/12 bg-black/76 px-2 text-zinc-400 active:text-white"
             aria-label="懐中電灯を切り替える"
           >
             <Flashlight className="h-3.5 w-3.5" />
@@ -450,7 +678,7 @@ export default function MainGameView({
               event.stopPropagation();
               handleInspect();
             }}
-            className="flex h-10 min-w-10 items-center justify-center border border-white/12 bg-black/76 px-2 text-zinc-400 active:text-white"
+            className="flex h-11 min-w-11 items-center justify-center border border-white/12 bg-black/76 px-2 text-zinc-400 active:text-white"
             aria-label="調べる"
           >
             <Search className="h-3.5 w-3.5" />
@@ -461,7 +689,7 @@ export default function MainGameView({
               event.stopPropagation();
               captureRef.current();
             }}
-            className="flex h-10 min-w-10 items-center justify-center border border-red-900/50 bg-red-950/50 px-2 text-red-300 active:bg-red-900/70"
+            className="flex h-11 min-w-11 items-center justify-center border border-red-900/50 bg-red-950/50 px-2 text-red-300 active:bg-red-900/70"
             aria-label="撮影する"
           >
             <Camera className="h-3.5 w-3.5" />
