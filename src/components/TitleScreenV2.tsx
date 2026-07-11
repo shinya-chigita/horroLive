@@ -15,6 +15,7 @@ import {
   ShieldAlert,
 } from 'lucide-react';
 import { AudioSynth } from '../utils/audio';
+import { createPlayerSpriteFrame } from '../game/playerSprite';
 
 interface TitleScreenV2Props {
   onStartGame: () => void;
@@ -40,6 +41,32 @@ const GAMEPLAY_PILLARS = [
     description: '視聴者は先に気づく。ただし、全員が人間とは限らない。',
   },
 ];
+
+const TITLE_CHARACTER_RECTS = createPlayerSpriteFrame({
+  now: 360,
+  isMoving: false,
+  isRunning: false,
+  isCrouching: false,
+  tension: 32,
+});
+
+function ReferenceCharacter() {
+  return (
+    <g transform="translate(276 312) scale(1.45)">
+      {TITLE_CHARACTER_RECTS.map((item, index) => (
+        <rect
+          key={`${item.part}-${index}`}
+          x={item.x}
+          y={item.y}
+          width={item.width}
+          height={item.height}
+          fill={item.color}
+          opacity={item.opacity}
+        />
+      ))}
+    </g>
+  );
+}
 
 function ReferencePreview() {
   return (
@@ -94,8 +121,8 @@ function ReferencePreview() {
         <rect x="600" y="113" width="19" height="5" fill="#23241f" />
         <rect x="600" y="127" width="19" height="5" fill="#23241f" />
 
-        <path d="M327 222 L696 128 L696 329 L327 263 Z" fill="url(#title-beam)" />
-        <rect x="342" y="246" width="240" height="3" fill="#c6b58c" opacity="0.13" />
+        <path d="M330 262 L696 151 L696 341 L330 274 Z" fill="url(#title-beam)" />
+        <rect x="342" y="267" width="240" height="3" fill="#c6b58c" opacity="0.13" />
 
         <g opacity="0.19">
           <rect x="616" y="139" width="20" height="23" fill="#d4d3c8" />
@@ -105,38 +132,7 @@ function ReferencePreview() {
           <rect x="630" y="145" width="3" height="6" fill="#080908" />
         </g>
 
-        <g transform="translate(276 198)">
-          <rect x="-19" y="64" width="13" height="40" fill="#171916" />
-          <rect x="7" y="64" width="13" height="40" fill="#171916" />
-          <rect x="-22" y="100" width="17" height="7" fill="#090a09" />
-          <rect x="6" y="100" width="17" height="7" fill="#090a09" />
-
-          <rect x="-28" y="5" width="56" height="66" fill="#34372f" />
-          <rect x="-23" y="11" width="46" height="53" fill="#42453a" />
-          <rect x="-24" y="42" width="48" height="5" fill="#20221e" />
-          <rect x="-19" y="50" width="13" height="10" fill="#292c26" />
-          <rect x="7" y="50" width="13" height="10" fill="#292c26" />
-
-          <rect x="-38" y="14" width="12" height="51" fill="#252821" />
-          <rect x="28" y="14" width="10" height="48" fill="#252821" />
-          <rect x="-44" y="20" width="8" height="37" fill="#1b1d19" />
-
-          <rect x="-22" y="-28" width="44" height="37" fill="#b89d82" />
-          <rect x="-27" y="-34" width="54" height="21" fill="#171918" />
-          <rect x="-24" y="-18" width="10" height="18" fill="#202321" />
-          <rect x="14" y="-18" width="10" height="18" fill="#202321" />
-          <rect x="-13" y="-14" width="4" height="4" fill="#090a09" />
-          <rect x="9" y="-14" width="4" height="4" fill="#090a09" />
-          <rect x="-5" y="-4" width="10" height="3" fill="#684c43" />
-
-          <rect x="29" y="24" width="38" height="17" fill="#1e2221" />
-          <rect x="51" y="28" width="18" height="10" fill="#292e2c" />
-          <rect x="65" y="30" width="10" height="6" fill="#bbb08f" />
-          <rect x="33" y="28" width="6" height="6" fill="#6f1717" />
-
-          <rect x="-35" y="25" width="8" height="24" fill="#4a4437" />
-          <rect x="-41" y="42" width="15" height="9" fill="#171917" />
-        </g>
+        <ReferenceCharacter />
 
         <g opacity="0.36">
           <rect x="91" y="80" width="1" height="192" fill="#6b6456" />

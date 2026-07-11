@@ -8,6 +8,12 @@ import {
 } from '../game/sceneDefinitions';
 import { isAnomalyRenderable } from '../game/anomalyDirector';
 import { canonicalSceneHistory } from '../game/sceneSnapshot';
+import {
+  createPlayerSpriteFrame,
+  getPlayerSpritePose,
+  PlayerSpriteFrameInput,
+  PlayerSpritePose,
+} from '../game/playerSprite';
 
 export const PIXEL_VIEW_WIDTH = 640;
 export const PIXEL_VIEW_HEIGHT = 300;
@@ -428,17 +434,17 @@ function drawFlashlightMask(
   player: PlayerState,
   mouse: { x: number; y: number },
   channel: SceneRenderChannel,
+  pose: PlayerSpritePose,
 ) {
   const playerX = PIXEL_VIEW_WIDTH * 0.42;
-  const playerY = player.isCrouching ? PIXEL_FLOOR_Y - 34 : PIXEL_FLOOR_Y - 49;
   const direction = mouse.x >= playerX ? 1 : -1;
-  const dx = mouse.x - playerX;
-  const dy = mouse.y - playerY;
+  const startX = playerX + direction * pose.flashlightSocket.x;
+  const startY = PIXEL_FLOOR_Y + pose.flashlightSocket.y;
+  const dx = mouse.x - startX;
+  const dy = mouse.y - startY;
   const angle = clamp(Math.atan2(dy, Math.abs(dx)), -0.52, 0.52);
   const length = 285;
   const spread = 0.29;
-  const startX = playerX + direction * 14;
-  const startY = playerY - 5;
   ctx.save();
   ctx.fillStyle = channel === 'pip' ? 'rgba(0,0,0,0.62)' : 'rgba(0,0,0,0.83)';
   ctx.fillRect(0, 0, PIXEL_VIEW_WIDTH, PIXEL_VIEW_HEIGHT);
@@ -469,55 +475,29 @@ function drawFlashlightMask(
   ctx.fillRect(0, 0, PIXEL_VIEW_WIDTH, PIXEL_VIEW_HEIGHT);
 }
 
-function drawPixelCharacter(ctx: CanvasRenderingContext2D, player: PlayerState, mouse: { x: number; y: number }, now: number, isMoving: boolean) {
+function drawPixelCharacter(
+  ctx: CanvasRenderingContext2D,
+  mouse: { x: number; y: number },
+  spriteInput: PlayerSpriteFrameInput,
+) {
   const x = Math.round(PIXEL_VIEW_WIDTH * 0.42);
   const direction = mouse.x >= x ? 1 : -1;
-  const cycle = isMoving ? now / (player.isRunning ? 72 : 112) : 0;
-  const step = isMoving ? Math.round(Math.sin(cycle) * (player.isRunning ? 4 : 2)) : 0;
-  const crouchOffset = player.isCrouching ? 12 : 0;
-  const baseY = PIXEL_FLOOR_Y - crouchOffset;
-  const blink = Math.floor(now / 2100) % 7 === 0;
+  const frame = createPlayerSpriteFrame(spriteInput);
   ctx.save();
-  ctx.translate(x, baseY);
+  ctx.translate(x, PIXEL_FLOOR_Y);
   ctx.scale(direction, 1);
-  ctx.globalAlpha = 0.48;
-  fillPixelRect(ctx, -17, -1, 34, 4, '#000000');
+  frame.forEach((item) => {
+    ctx.globalAlpha = item.opacity ?? 1;
+    fillPixelRect(
+      ctx,
+      item.x,
+      item.y,
+      item.width,
+      item.height,
+      item.color,
+    );
+  });
   ctx.globalAlpha = 1;
-  fillPixelRect(ctx, -8 + step, -22, 7, 21, '#141615');
-  fillPixelRect(ctx, -10 + step, -3, 11, 4, '#080908');
-  fillPixelRect(ctx, 2 - step, -22, 7, 21, '#1d201e');
-  fillPixelRect(ctx, 1 - step, -3, 12, 4, '#090a09');
-  fillPixelRect(ctx, -17, -63, 13, 34, '#222923');
-  fillPixelRect(ctx, -19, -57, 3, 21, '#111512');
-  fillPixelRect(ctx, -15, -58, 9, 2, '#3d463e');
-  fillPixelRect(ctx, -15, -39, 9, 2, '#111512');
-  fillPixelRect(ctx, -10, -64, 24, 43, '#353a33');
-  fillPixelRect(ctx, -7, -61, 18, 37, '#3e443b');
-  fillPixelRect(ctx, 1, -61, 2, 37, '#171a17');
-  fillPixelRect(ctx, -8, -46, 7, 8, '#2b302a');
-  fillPixelRect(ctx, 5, -46, 7, 8, '#2b302a');
-  fillPixelRect(ctx, -10, -22, 24, 3, '#161815');
-  fillPixelRect(ctx, -9, -68, 20, 8, '#252a26');
-  fillPixelRect(ctx, -6, -67, 14, 3, '#4a5047');
-  fillPixelRect(ctx, -8, -87, 19, 20, '#a6937c');
-  fillPixelRect(ctx, -10, -89, 21, 8, '#171b1d');
-  fillPixelRect(ctx, -12, -84, 5, 14, '#181c1e');
-  fillPixelRect(ctx, -7, -92, 16, 5, '#1c2022');
-  fillPixelRect(ctx, 7, -84, 6, 16, '#202426');
-  fillPixelRect(ctx, 10, -78, 3, 4, '#121416');
-  if (!blink) fillPixelRect(ctx, 4, -79, 2, 2, player.tension > 78 ? '#d9c0ad' : '#2a2723');
-  if (player.tension > 75) fillPixelRect(ctx, -1, -73, 6, 1, '#5f4138');
-  fillPixelRect(ctx, 11, -57, 12, 7, '#353a33');
-  fillPixelRect(ctx, 18, -55, 9, 5, '#171a19');
-  fillPixelRect(ctx, 25, -58, 9, 8, '#252b2b');
-  fillPixelRect(ctx, 32, -56, 3, 4, '#6c7773');
-  fillPixelRect(ctx, 16, -48, 5, 13, '#8e7d69');
-  fillPixelRect(ctx, 19, -43, 12, 5, '#2a2d2a');
-  fillPixelRect(ctx, 29, -44, 8, 7, '#3b403d');
-  fillPixelRect(ctx, 36, -42, 4, 3, '#b7a780');
-  fillPixelRect(ctx, -5, -60, 2, 28, '#171a17');
-  fillPixelRect(ctx, 8, -60, 2, 28, '#171a17');
-  fillPixelRect(ctx, -1, -35, 6, 7, '#1c211e');
   ctx.restore();
 }
 
@@ -561,12 +541,20 @@ export function renderPixelScene({
   ctx.save();
   ctx.imageSmoothingEnabled = false;
   ctx.clearRect(0, 0, PIXEL_VIEW_WIDTH, PIXEL_VIEW_HEIGHT);
+  const spriteInput: PlayerSpriteFrameInput = {
+    now,
+    isMoving,
+    isRunning: player.isRunning,
+    isCrouching: player.isCrouching,
+    tension: player.tension,
+  };
+  const playerPose = getPlayerSpritePose(spriteInput);
   drawEnvironment(ctx, player.x);
   items.forEach((item) => drawItem(ctx, item, player.x, now));
   anomalies.forEach((anomaly) => drawAnomaly(ctx, anomaly, player, now, channel));
-  drawFlashlightMask(ctx, player, mouse, channel);
+  drawFlashlightMask(ctx, player, mouse, channel, playerPose);
   if (channel === 'main') {
-    drawPixelCharacter(ctx, player, mouse, now, isMoving);
+    drawPixelCharacter(ctx, mouse, spriteInput);
     drawScreenNoise(ctx, now, player.tension);
   }
   ctx.restore();
