@@ -62,7 +62,13 @@ npm run build
 
 ゲーム進行と配信状態は `src/AppV2.tsx`、盤面は `src/game/boardDefinitions.ts`、リアルタイムの探索描画は `src/components/MainGameView.tsx` に分離しています。MainとPIPは `src/game/sceneSnapshot.ts` の共通SceneSnapshot履歴を使い、背景・設備は `src/game/sceneDefinitions.ts` でデータ定義しています。
 
-設計の基準は [Art Direction v3.1](docs/ART_DIRECTION_V3_1.md)、画面構造は [Wireframes v3.1](docs/WIREFRAMES_V3_1.md)、今回の盤面・周回拡張は [Expansion v3.2](docs/EXPANSION_V3_2.md) を参照してください。
+最新のクリエイティブ基準は [Creative Direction v4](docs/CREATIVE_DIRECTION_V4.md)、代表遭遇の仕様は [Vertical Slice & Gimmick Direction v4](docs/VERTICAL_SLICE_GIMMICKS_V4.md)、画像制作と実装契約は [Art & Asset Bible v4](docs/ART_ASSET_BIBLE_V4.md)、盤面・周回拡張は [Expansion v3.2](docs/EXPANSION_V3_2.md) を参照してください。v3.1資料は履歴として残しています。
+
+コンセプト制作物:
+
+- [主人公ディレクション](assets/concepts/character-direction-v4.png)
+- [廃病院小物ディレクション](assets/concepts/hospital-props-direction-v4.png)
+- [主怪異「観測者」ディレクション](assets/concepts/observer-direction-v4-v2.png)
 
 ## デプロイ
 
