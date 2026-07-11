@@ -24,14 +24,17 @@ import {
 } from 'lucide-react';
 import {
   Anomaly,
-  CHAPTERS,
+  AnomalyDirectorPhase,
+  BoardId,
   Comment,
   EndingType,
   GameItem,
   GamePhase,
   PlayerState,
   RiskTier,
+  RunMode,
 } from './types';
+import BoardSelectScreen from './components/BoardSelectScreen';
 import InvestigationJournal from './components/InvestigationJournal';
 import MainGameView from './components/MainGameView';
 import LiveChatV2 from './components/LiveChatV2';
@@ -43,7 +46,6 @@ import {
   getViewerBand,
   transitionViewerRisk,
   VIEWER_BANDS,
-  ViewerBand,
 } from './game/risk';
 import { canonicalSceneHistory } from './game/sceneSnapshot';
 import { CameraCaptureTarget } from './game/capture';
@@ -51,6 +53,21 @@ import {
   createAnomalyDirectorState,
   isAnomalyResolved,
 } from './game/anomalyDirector';
+import {
+  createBoardAnomalies,
+  createBoardComments,
+  createBoardItems,
+  getAnomalyChatCue,
+  getBoardDefinition,
+} from './game/boardDefinitions';
+import {
+  loadProgression,
+  recordRun,
+  recordRunAttempt,
+  saveProgression,
+  type ProgressionState,
+} from './game/progression';
+import { evaluateRoute } from './game/route';
 import { AudioSynth } from './utils/audio';
 
 const USER_NAMES = [
@@ -93,166 +110,10 @@ const INITIAL_PLAYER: PlayerState = {
   health: 100,
 };
 
-const createInitialItems = (): GameItem[] => [
-  {
-    id: 'KEYCARD_BLUE',
-    name: '診察室のブルーカードキー',
-    description: '診察室および遺体安置所の扉を開放するためのセキュリティカードキー。',
-    found: false,
-    type: 'keycard',
-  },
-  {
-    id: 'DIARY_1',
-    name: '看護師の手記（ちぎれた一頁）',
-    description: '1998年の事件当夜に書かれたものと思われる記録。',
-    found: false,
-    type: 'diary',
-    content:
-      '「23時47分、突然電子機器が一斉にノイズを吐き始めた。霊安室の扉が内側から叩かれている……これは仕込みじゃない……」',
-  },
-  {
-    id: 'DIARY_2',
-    name: '古い配信機材に残されたログ',
-    description: '過去にここで失踪した配信者の最後のテキスト下書き。',
-    found: false,
-    type: 'diary',
-    content:
-      '「バズるために来た。カメラの顔認識が、何もない廊下に10個も出ている。奴らはレンズ越しにこちらを見ている……」',
-  },
-  {
-    id: 'PHOTO_OLD',
-    name: '祭壇に残された集合写真',
-    description: 'かつてこの病院の地下で行われていた、集団生配信儀式の記録写真。',
-    found: false,
-    type: 'photo',
-    content:
-      '「視聴者を媒介にして、彼岸と此岸を接続するLIVE配信儀式。視聴者数が増えるほど、呪いは増幅する。」',
-  },
-];
-
-const createInitialAnomalies = (): Anomaly[] => [
-  {
-    id: 'ANOMALY_1',
-    x: 600,
-    width: 40,
-    type: 'orb',
-    description: '浮遊する蒼い光球（オーブ）',
-    points: 8000,
-    captured: false,
-    visibleOnlyInPip: false,
-    yOffset: -30,
-  },
-  {
-    id: 'ANOMALY_2',
-    x: 1500,
-    width: 60,
-    type: 'ghost',
-    description: '鏡の奥に佇む顔の白い少女影',
-    points: 25000,
-    captured: false,
-    visibleOnlyInPip: true,
-    yOffset: -10,
-  },
-  {
-    id: 'ANOMALY_3',
-    x: 2000,
-    width: 80,
-    type: 'writing',
-    description: '壁に勝手に浮かび上がる呪詛文字',
-    points: 15000,
-    captured: false,
-    visibleOnlyInPip: false,
-    yOffset: 10,
-  },
-  {
-    id: 'ANOMALY_4',
-    x: 2900,
-    width: 50,
-    type: 'doll',
-    description: '車椅子に置かれた勝手に動く日本人形',
-    points: 18000,
-    captured: false,
-    visibleOnlyInPip: false,
-    yOffset: 0,
-  },
-  {
-    id: 'ANOMALY_5',
-    x: 4100,
-    width: 70,
-    type: 'ghost',
-    description: '廊下の天井から逆さに吊る下がる男',
-    points: 35000,
-    captured: false,
-    visibleOnlyInPip: true,
-    yOffset: -50,
-  },
-  {
-    id: 'ANOMALY_6',
-    x: 4750,
-    width: 90,
-    type: 'shadow',
-    description: '祭壇を覆い尽くす巨大な影',
-    points: 45000,
-    captured: false,
-    visibleOnlyInPip: false,
-    yOffset: -20,
-  },
-];
-
-const createInitialComments = (): Comment[] => {
-  const now = Date.now();
-  return [
-    {
-      id: 'seed-1',
-      username: 'kage_oni',
-      text: '始まった！待ってたで！',
-      type: 'normal',
-      timestamp: now - 3000,
-    },
-    {
-      id: 'seed-2',
-      username: 'cyber_neko',
-      text: '今日どこ？ また廃墟かよw',
-      type: 'normal',
-      timestamp: now - 2000,
-    },
-    {
-      id: 'seed-3',
-      username: 'mizuki_v',
-      text: '右上のカメラ、さっきから一瞬だけ変じゃない？',
-      type: 'hint',
-      timestamp: now - 1000,
-    },
-  ];
-};
-
-const INITIAL_LOGS = [
-  'LIVE配信接続完了。',
-  'ストリームチャンネル：心霊突撃Ch 開設。',
-  '廃病院「白鳴霊園付属病棟」へ侵入。映像記録を開始した。',
-];
-
-const INTRO_TEXTS = [
-  {
-    label: '23:42 / OUTSIDE',
-    text: '「今夜は、配信者が何人も消えた廃病院から生配信する。肉眼で見えなくても、カメラには映るらしい。」',
-  },
-  {
-    label: '23:47 / SIGNAL ONLINE',
-    text: '「頼れるのは懐中電灯と右上の配信用カメラ、それからコメント欄だけ。視聴者が先に異変を見つけるかもしれない。」',
-  },
-  {
-    label: '23:49 / RULE DISCOVERED',
-    text: '「怪異を画面中央に捉えたら撮影する。手記も回収する。同接が増えるほど撮れ高は上がるが、ここでは何かも強くなる。」',
-  },
-  {
-    label: '23:50 / DOOR UNSEALED',
-    text: '「奥の祭壇まで行き、真相を記録して、生きて帰る。……配信、開始。」',
-  },
-];
-
-const startPositionForChapter = (chapterId: number) =>
-  CHAPTERS[Math.max(0, chapterId - 1)]?.startPos ?? 10;
+const startPositionForChapter = (
+  chapters: readonly { startPos: number }[],
+  chapterId: number,
+) => chapters[Math.max(0, chapterId - 1)]?.startPos ?? 10;
 
 const uniqueId = (prefix: string) =>
   `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -298,15 +159,33 @@ const trapDialogFocus = (event: React.KeyboardEvent<HTMLElement>) => {
   }
 };
 
-const createInitialViewerRisk = () =>
-  transitionViewerRisk(createViewerRiskState('chapter-1'), {
-    viewerCount: getViewerBand(0),
+const createInitialViewerRisk = (
+  boardId: BoardId = 'hospital',
+  chapterId = 1,
+  tier: RiskTier = 0,
+) =>
+  transitionViewerRisk(createViewerRiskState(`${boardId}:chapter-${chapterId}`), {
+    viewerCount: getViewerBand(tier),
   }).state;
 
 export default function AppV2() {
+  const loadedProgression = useMemo<ProgressionState>(
+    () => loadProgression(),
+    [],
+  );
   const [phase, setPhase] = useState<GamePhase>('TITLE');
+  const [progression, setProgression] = useState<ProgressionState>(
+    loadedProgression,
+  );
+  const [selectedBoardId, setSelectedBoardId] = useState<BoardId>(
+    loadedProgression.lastBoardId,
+  );
+  const [runMode, setRunMode] = useState<RunMode>('STANDARD');
+  const [runId, setRunId] = useState(() => uniqueId('run-preview'));
   const [chapterId, setChapterId] = useState(1);
-  const [viewerRisk, setViewerRisk] = useState(createInitialViewerRisk);
+  const [viewerRisk, setViewerRisk] = useState(() =>
+    createInitialViewerRisk(loadedProgression.lastBoardId),
+  );
   const [isMuted, setIsMuted] = useState(false);
   const [introStep, setIntroStep] = useState(0);
   const [endingType, setEndingType] = useState<EndingType>('ESCAPED');
@@ -327,10 +206,24 @@ export default function AppV2() {
   );
 
   const [player, setPlayer] = useState<PlayerState>({ ...INITIAL_PLAYER });
-  const [items, setItems] = useState<GameItem[]>(createInitialItems);
-  const [anomalies, setAnomalies] = useState<Anomaly[]>(createInitialAnomalies);
-  const [logs, setLogs] = useState<string[]>([...INITIAL_LOGS]);
-  const [comments, setComments] = useState<Comment[]>(createInitialComments);
+  const [items, setItems] = useState<GameItem[]>(() =>
+    createBoardItems(loadedProgression.lastBoardId),
+  );
+  const [anomalies, setAnomalies] = useState<Anomaly[]>(() =>
+    createBoardAnomalies(loadedProgression.lastBoardId),
+  );
+  const [logs, setLogs] = useState<string[]>(() => [
+    ...getBoardDefinition(loadedProgression.lastBoardId).initialLogs,
+  ]);
+  const [comments, setComments] = useState<Comment[]>(() =>
+    createBoardComments(loadedProgression.lastBoardId),
+  );
+  const [routeLoopCount, setRouteLoopCount] = useState(0);
+  const activeBoard = useMemo(
+    () => getBoardDefinition(selectedBoardId),
+    [selectedBoardId],
+  );
+  const modeDefinition = activeBoard.modes[runMode];
   const viewerCount = viewerRisk.viewerCount;
   const riskTier = viewerRisk.tier;
   const shouldShowRotateHint =
@@ -342,6 +235,8 @@ export default function AppV2() {
   const itemsRef = useRef(items);
   const anomaliesRef = useRef(anomalies);
   const chapterRef = useRef(chapterId);
+  const runIdRef = useRef(runId);
+  const routeLoopCountRef = useRef(routeLoopCount);
   const viewerRef = useRef(viewerCount);
   const riskTierRef = useRef(riskTier);
   const latestPipTargetRef = useRef<CameraCaptureTarget | null>(null);
@@ -351,6 +246,8 @@ export default function AppV2() {
     distance: Number.POSITIVE_INFINITY,
   });
   const transitionGuardRef = useRef<number | null>(null);
+  const routeGuardTimerRef = useRef<number | null>(null);
+  const chatSilenceUntilRef = useRef(0);
   const emptyBatteryLoggedRef = useRef(false);
   const gameOverTriggeredRef = useRef(false);
   const journalDialogRef = useRef<HTMLDivElement | null>(null);
@@ -388,15 +285,36 @@ export default function AppV2() {
   }, [anomalies]);
 
   useEffect(() => {
+    runIdRef.current = runId;
+  }, [runId]);
+
+  useEffect(() => {
+    routeLoopCountRef.current = routeLoopCount;
+  }, [routeLoopCount]);
+
+  useEffect(() => {
+    saveProgression(progression);
+  }, [progression]);
+
+  useEffect(
+    () => () => {
+      if (routeGuardTimerRef.current !== null) {
+        window.clearTimeout(routeGuardTimerRef.current);
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
     chapterRef.current = chapterId;
     transitionGuardRef.current = null;
     setViewerRisk((current) =>
       transitionViewerRisk(current, {
-        chapterId: `chapter-${chapterId}`,
+        chapterId: `${selectedBoardId}:chapter-${chapterId}`,
         viewerCount: current.viewerCount,
       }).state,
     );
-  }, [chapterId]);
+  }, [chapterId, selectedBoardId]);
 
   useEffect(() => {
     viewerRef.current = viewerCount;
@@ -451,6 +369,10 @@ export default function AppV2() {
     };
 
     const emitComment = () => {
+      if (Date.now() < chatSilenceUntilRef.current) {
+        schedule();
+        return;
+      }
       const currentPlayer = playerRef.current;
       const currentNearest = nearestRef.current;
       const currentChapter = chapterRef.current;
@@ -461,67 +383,31 @@ export default function AppV2() {
       let type: Comment['type'] = 'normal';
 
       if (currentPlayer.tension > 88) {
-        const lines = [
-          'うしろ！！ 今すぐ走れ！',
-          '右上の顔認識、数が増えてる',
-          '音消したの誰？ 息だけ聞こえる',
-          '配信切れ、マジで帰れ',
-          'み　え　て　る　よ',
-          'コメントしてるの、今もう視聴者だけじゃない',
-        ];
+        const lines = activeBoard.chatLines.hijack;
         text = lines[Math.floor(Math.random() * lines.length)];
         type = Math.random() > 0.35 ? 'spooky' : 'glitch';
       } else if (!currentPlayer.flashlightOn) {
-        const lines = [
-          'ライト消えた！？',
-          '暗闇の左側に誰かいる',
-          '電池、温存したほうがいいけど今は点けて',
-          '画面真っ黒なのに右上だけ顔認識してる',
-        ];
+        const lines = activeBoard.chatLines.dark;
         text = lines[Math.floor(Math.random() * lines.length)];
         type = 'spooky';
       } else if (currentPlayer.isRunning) {
-        const lines = [
-          'カメラぶれすぎ！ でも止まるな！',
-          '後ろの足音、配信者のと合ってない',
-          '走れ走れ走れ',
-          '今の曲がり角に何かいたぞ',
-        ];
+        const lines = activeBoard.chatLines.running;
         text = lines[Math.floor(Math.random() * lines.length)];
       } else if (
         currentNearest.anomaly &&
         currentNearest.distance < 430 &&
         !currentNearest.anomaly.captured
       ) {
-        const lines = [
-          '右上カメラを見て！',
-          '画面中央、そこに合わせて撮って！',
-          '肉眼じゃなくてカメラにいる',
-          '止まって。今、顔認識が出た',
-          '撮れ高じゃなくて証拠だ、CAPTURE！',
-        ];
+        const lines = activeBoard.chatLines.nearby;
         text = lines[Math.floor(Math.random() * lines.length)];
         type = 'hint';
       } else {
-        const lines = [
-          '同接じわじわ増えてる',
-          'この病院、奥に行くほど時刻が巻き戻ってない？',
-          '手記は全部拾って。たぶんエンディング変わる',
-          'コメント欄に知らない固定コメントがあるんだけど',
-          '右上カメラだけ色味が違うの、仕様？',
-          '無理はすんな。でも次の扉までは見たい',
-        ];
+        const lines = activeBoard.chatLines.ambient;
         text = lines[Math.floor(Math.random() * lines.length)];
       }
 
       if ((riskTier >= 3 || currentChapter >= 4) && Math.random() < 0.32) {
-        const lines = [
-          'L I V E は 終 わ ら な い',
-          'おまえの部屋も映ってる',
-          '視聴者数　＝　入口の数',
-          '配信者を退出させました',
-          '死死死死死死死死',
-        ];
+        const lines = activeBoard.chatLines.hijack;
         text = lines[Math.floor(Math.random() * lines.length)];
         type = 'glitch';
       }
@@ -537,36 +423,15 @@ export default function AppV2() {
 
     schedule();
     return () => window.clearTimeout(timerId);
-  }, [isInterfacePaused, phase, pushComment, riskTier]);
+  }, [activeBoard, isInterfacePaused, phase, pushComment, riskTier]);
 
   useEffect(() => {
     if (phase !== 'PLAYING') return;
 
-    const cues: Record<ViewerBand, { username: string; text: string; log: string }> = {
-      237: {
-        username: 'SYSTEM_LIVE',
-        text: '同時視聴 237。映像と現場音声の同期を確認しています。',
-        log: '視聴者数が237人に到達。遠方の不一致監視を開始した。',
-      },
-      2_370: {
-        username: 'nanashi',
-        text: '右上だけ見て。さっきまで、あそこには誰もいなかった。',
-        log: '視聴者数が2,370人に到達。PIPが未知の輪郭を検出した。',
-      },
-      23_700: {
-        username: 'uro_27',
-        text: '止まって。後ろの距離が、肉眼とカメラで合ってない。',
-        log: '視聴者数が23,700人に到達。映像遅延が不規則に増幅している。',
-      },
-      237_000: {
-        username: 'SYSTEM_237000',
-        text: '配信者を退出させました。視聴者は、もう中にいます。',
-        log: '視聴者数が237,000人に到達。配信制御権が外部へ移行した。',
-      },
-    };
+    const cues = activeBoard.riskCues;
 
     viewerRisk.firedBands.forEach((band) => {
-      const ledgerKey = `${viewerRisk.chapterId}:${band}`;
+      const ledgerKey = `${selectedBoardId}:${viewerRisk.chapterId}:${band}`;
       if (announcedRiskBandsRef.current.has(ledgerKey)) return;
       announcedRiskBandsRef.current.add(ledgerKey);
 
@@ -580,7 +445,15 @@ export default function AppV2() {
       handleAddLog(`【RISK TIER ${tier}】${cue.log}`);
       if (tier >= 2 && !prefersReducedMotion) AudioSynth.playGlitch();
     });
-  }, [handleAddLog, phase, prefersReducedMotion, pushComment, viewerRisk]);
+  }, [
+    activeBoard,
+    handleAddLog,
+    phase,
+    prefersReducedMotion,
+    pushComment,
+    selectedBoardId,
+    viewerRisk,
+  ]);
 
   useEffect(() => {
     const handleVisibility = () => {
@@ -827,7 +700,7 @@ export default function AppV2() {
 
   const handleTriggerScare = useCallback(
     (type: 'jumpscare' | 'chase' | 'whisper') => {
-      if (prefersReducedMotion) {
+      if (type === 'whisper' || prefersReducedMotion) {
         AudioSynth.playNotification();
       } else {
         AudioSynth.playStinger();
@@ -856,16 +729,45 @@ export default function AppV2() {
     [prefersReducedMotion],
   );
 
+  const handleAnomalyCue = useCallback(
+    (
+      anomaly: Anomaly,
+      nextPhase: AnomalyDirectorPhase,
+    ) => {
+      const cue = getAnomalyChatCue(selectedBoardId, anomaly.id, nextPhase);
+      if (!cue) return;
+      const silenceMs = nextPhase === 'TELEGRAPH' ? 1_850 : 850;
+      chatSilenceUntilRef.current = Date.now() + silenceMs;
+      pushComment({
+        username:
+          nextPhase === 'TELEGRAPH'
+            ? selectedBoardId === 'school'
+              ? 'room_2B'
+              : 'nanashi'
+            : 'uro_27',
+        text: cue,
+        type:
+          nextPhase === 'MISSED'
+            ? 'glitch'
+            : nextPhase === 'TELEGRAPH'
+              ? 'hint'
+              : 'spooky',
+      });
+      AudioSynth.playNotification();
+    },
+    [pushComment, selectedBoardId],
+  );
+
   const handlePickupItem = useCallback(
     (itemId: string) => {
       const item = itemsRef.current.find((candidate) => candidate.id === itemId);
       if (!item || item.found) return;
 
-      setItems((previous) =>
-        previous.map((candidate) =>
-          candidate.id === itemId ? { ...candidate, found: true } : candidate,
-        ),
+      const nextItems = itemsRef.current.map((candidate) =>
+        candidate.id === itemId ? { ...candidate, found: true } : candidate,
       );
+      itemsRef.current = nextItems;
+      setItems(nextItems);
       AudioSynth.playCaptureSuccess();
       handleAddLog(`【証拠回収】「${item.name}」を記録した。`);
       pushComment({
@@ -963,50 +865,107 @@ export default function AppV2() {
     const totalFound = itemsRef.current.filter((item) => item.found).length;
     const totalCaptured = anomaliesRef.current.filter((anomaly) => anomaly.captured).length;
     const viewers = viewerRef.current;
+    let resolvedEnding: EndingType;
 
-    if (totalFound === createInitialItems().length && totalCaptured >= 5) {
-      setEndingType('LOST_ARCHIVE');
+    if (
+      totalFound === activeBoard.items.length &&
+      totalCaptured >= Math.max(1, activeBoard.anomalies.length - 1)
+    ) {
+      resolvedEnding = 'LOST_ARCHIVE';
     } else if (viewers > 130000) {
-      setEndingType('OVER_EXPLOITED');
+      resolvedEnding = 'OVER_EXPLOITED';
     } else {
-      setEndingType('ESCAPED');
+      resolvedEnding = 'ESCAPED';
     }
 
+    setEndingType(resolvedEnding);
+    setProgression((current) =>
+      recordRun(current, {
+        runId: runIdRef.current,
+        boardId: selectedBoardId,
+        mode: runMode,
+        ending: resolvedEnding,
+        foundItemIds: itemsRef.current
+          .filter((item) => item.found)
+          .map((item) => item.id),
+        recordedAnomalyIds: anomaliesRef.current
+          .filter((anomaly) => anomaly.captured)
+          .map((anomaly) => anomaly.id),
+      }),
+    );
     setPhase('ENDING');
     AudioSynth.playStinger();
-  }, []);
+  }, [activeBoard, runMode, selectedBoardId]);
 
   const handleChapterComplete = useCallback(() => {
     const currentChapter = chapterRef.current;
     if (transitionGuardRef.current === currentChapter) return;
     transitionGuardRef.current = currentChapter;
 
-    if (
-      currentChapter === 2 &&
-      !itemsRef.current.find((item) => item.id === 'KEYCARD_BLUE')?.found
-    ) {
-      handleAddLog('【LOCKED】診察室は施錠されている。第一病棟でカードキーを探せ。');
-      setPlayer((previous) => ({ ...previous, x: 2320 }));
+    const route = evaluateRoute(
+      activeBoard,
+      currentChapter,
+      itemsRef.current,
+      routeLoopCountRef.current,
+    );
+    if (route.status === 'BLOCK') {
+      handleAddLog(
+        route.kind === 'LOOP'
+          ? `${route.log} 【LOOP ${route.loopCount}】`
+          : route.log,
+      );
+      if (route.kind === 'LOOP') {
+        routeLoopCountRef.current = route.loopCount;
+        setRouteLoopCount(route.loopCount);
+      }
+      setPlayer((previous) => {
+        const next = {
+          ...previous,
+          x: route.targetX,
+          tension: Math.min(
+            100,
+            previous.tension + (route.kind === 'LOOP' ? 9 : 0),
+          ),
+        };
+        playerRef.current = next;
+        return next;
+      });
       pushComment({
-        username: 'kage_99',
-        text: 'カードキー取り忘れてる！ 開いたロッカーの近く！',
+        username: route.kind === 'LOOP' ? 'room_2B' : 'kage_99',
+        text:
+          route.kind === 'LOOP'
+            ? `${route.chat}（${route.loopCount}周目）`
+            : route.chat,
         type: 'hint',
       });
-      window.setTimeout(() => {
-        if (transitionGuardRef.current === currentChapter) {
+      if (route.kind === 'LOOP' && !prefersReducedMotion) {
+        AudioSynth.playGlitch();
+      }
+      if (routeGuardTimerRef.current !== null) {
+        window.clearTimeout(routeGuardTimerRef.current);
+      }
+      const guardedRunId = runIdRef.current;
+      routeGuardTimerRef.current = window.setTimeout(() => {
+        if (
+          runIdRef.current === guardedRunId &&
+          transitionGuardRef.current === currentChapter
+        ) {
           transitionGuardRef.current = null;
         }
-      }, 600);
+        routeGuardTimerRef.current = null;
+      }, route.kind === 'LOOP' ? 900 : 600);
       return;
     }
 
-    if (currentChapter < CHAPTERS.length) {
+    if (currentChapter < activeBoard.chapters.length) {
       const nextChapter = currentChapter + 1;
-      handleAddLog(`【CHECKPOINT】${CHAPTERS[currentChapter - 1].subtitle} を突破した。`);
+      handleAddLog(
+        `【CHECKPOINT】${activeBoard.chapters[currentChapter - 1].subtitle} を突破した。`,
+      );
       setChapterId(nextChapter);
       pushComment({
         username: 'SYSTEM_ARCHIVE',
-        text: `${CHAPTERS[nextChapter - 1].title} — ${CHAPTERS[nextChapter - 1].subtitle}`,
+        text: `${activeBoard.chapters[nextChapter - 1].title} — ${activeBoard.chapters[nextChapter - 1].subtitle}`,
         type: 'system',
       });
       AudioSynth.playNotification();
@@ -1014,7 +973,13 @@ export default function AppV2() {
     }
 
     resolveEnding();
-  }, [handleAddLog, pushComment, resolveEnding]);
+  }, [
+    activeBoard,
+    handleAddLog,
+    prefersReducedMotion,
+    pushComment,
+    resolveEnding,
+  ]);
 
   const handleRetry = useCallback(() => {
     const currentChapter = chapterRef.current;
@@ -1022,7 +987,12 @@ export default function AppV2() {
     latestPipTargetRef.current = null;
     setPlayer({
       ...INITIAL_PLAYER,
-      x: Math.max(10, startPositionForChapter(currentChapter) + 20),
+      x: Math.max(
+        10,
+        startPositionForChapter(activeBoard.chapters, currentChapter) + 20,
+      ),
+      battery: modeDefinition.initialBattery,
+      tension: modeDefinition.initialTension,
     });
     setAnomalies((previous) => {
       const next = previous.map((anomaly) => {
@@ -1065,32 +1035,88 @@ export default function AppV2() {
       type: 'hype',
       badge: 'mod',
     });
-  }, [handleAddLog, pushComment]);
+  }, [activeBoard.chapters, handleAddLog, modeDefinition, pushComment]);
 
-  const resetAll = useCallback((nextPhase: GamePhase = 'TITLE') => {
+  const prepareBoardSession = useCallback(
+    (boardId: BoardId, mode: RunMode, nextPhase: GamePhase = 'INTRO_STORY') => {
+      const board = getBoardDefinition(boardId);
+      const nextMode = board.modes[mode];
+      const nextRunId = uniqueId(`run-${boardId}`);
+      const nextPlayer: PlayerState = {
+        ...INITIAL_PLAYER,
+        battery: nextMode.initialBattery,
+        tension: nextMode.initialTension,
+      };
+      const nextItems = createBoardItems(boardId);
+      const nextAnomalies = createBoardAnomalies(boardId);
+
+      canonicalSceneHistory.clear();
+      latestPipTargetRef.current = null;
+      announcedRiskBandsRef.current.clear();
+      transitionGuardRef.current = null;
+      if (routeGuardTimerRef.current !== null) {
+        window.clearTimeout(routeGuardTimerRef.current);
+        routeGuardTimerRef.current = null;
+      }
+      chatSilenceUntilRef.current = 0;
+      routeLoopCountRef.current = 0;
+      runIdRef.current = nextRunId;
+      playerRef.current = nextPlayer;
+      itemsRef.current = nextItems;
+      anomaliesRef.current = nextAnomalies;
+      setSelectedBoardId(boardId);
+      setRunMode(mode);
+      setRunId(nextRunId);
+      setChapterId(1);
+      setViewerRisk(
+        createInitialViewerRisk(boardId, 1, nextMode.initialRiskTier),
+      );
+      setPlayer(nextPlayer);
+      setItems(nextItems);
+      setAnomalies(nextAnomalies);
+      setLogs([...board.initialLogs]);
+      setComments(createBoardComments(boardId));
+      setRouteLoopCount(0);
+      setIntroStep(0);
+      setEndingType('ESCAPED');
+      setIsJournalOpen(false);
+      setIsChatOpen(false);
+      setShowObjective(false);
+      setIsRotateHintDismissed(false);
+      setIsMuted(false);
+      gameOverTriggeredRef.current = false;
+      emptyBatteryLoggedRef.current = false;
+      AudioSynth.setMuted(false);
+      setProgression((current) =>
+        recordRunAttempt(current, { runId: nextRunId, boardId }),
+      );
+      setPhase(nextPhase);
+    },
+    [],
+  );
+
+  const startSelectedBoard = useCallback(() => {
+    prepareBoardSession(selectedBoardId, runMode, 'INTRO_STORY');
+  }, [prepareBoardSession, runMode, selectedBoardId]);
+
+  const returnToTitle = useCallback(() => {
     canonicalSceneHistory.clear();
     latestPipTargetRef.current = null;
-    announcedRiskBandsRef.current.clear();
-    setChapterId(1);
-    setViewerRisk(createInitialViewerRisk());
-    setPlayer({ ...INITIAL_PLAYER });
-    setItems(createInitialItems());
-    setAnomalies(createInitialAnomalies());
-    setLogs([...INITIAL_LOGS]);
-    setComments(createInitialComments());
-    setIntroStep(0);
-    setEndingType('ESCAPED');
     setIsJournalOpen(false);
     setIsChatOpen(false);
-    setShowObjective(false);
-    setIsRotateHintDismissed(false);
-    setIsMuted(false);
-    AudioSynth.setMuted(false);
-    setPhase(nextPhase);
+    setPhase('TITLE');
+  }, []);
+
+  const returnToBoardSelect = useCallback(() => {
+    canonicalSceneHistory.clear();
+    latestPipTargetRef.current = null;
+    setIsJournalOpen(false);
+    setIsChatOpen(false);
+    setPhase('BOARD_SELECT');
   }, []);
 
   const advanceIntro = useCallback(() => {
-    if (introStep < INTRO_TEXTS.length - 1) {
+    if (introStep < activeBoard.intros.length - 1) {
       setIntroStep((previous) => previous + 1);
       AudioSynth.playNotification();
       return;
@@ -1098,7 +1124,7 @@ export default function AppV2() {
 
     setPhase('PLAYING');
     AudioSynth.playNotification();
-  }, [introStep]);
+  }, [activeBoard.intros.length, introStep]);
 
   useEffect(() => {
     if (phase !== 'INTRO_STORY') return undefined;
@@ -1114,26 +1140,12 @@ export default function AppV2() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [advanceIntro, phase]);
 
-  const progress = Math.min(1, Math.max(0, player.x / 5000));
+  const progress = Math.min(
+    1,
+    Math.max(0, player.x / activeBoard.worldEnd),
+  );
   const signalBlocked = player.tension > 82;
-
-  const endingCopy = {
-    LOST_ARCHIVE: {
-      code: 'ENDING A / TRUE ARCHIVE',
-      title: '深淵の真実',
-      body: 'すべての記録は一本の配信へ結び直された。失踪事件は、視聴者の視線を入口にする儀式だった。君は証拠を持ち帰った。しかしアーカイブを再生するたび、視聴者数は一人ずつ増え続ける。',
-    },
-    OVER_EXPLOITED: {
-      code: 'ENDING B / NEVER OFFLINE',
-      title: '終わらない配信',
-      body: '同接は限界を超え、祭壇は歓声で満たされた。終了ボタンは消え、コメント欄には君の部屋の映像が流れ始める。次の配信者を待つまで、君はこのチャンネルの中でLIVEを続ける。',
-    },
-    ESCAPED: {
-      code: 'ENDING C / SIGNAL SAVED',
-      title: '朝まで生きる',
-      body: '撮れ高より命を選び、君は夜明け前の道路へ転がり出た。コメント欄は「チキン」と笑ったが、背後の病院から聞こえる通知音には、もう振り返らなかった。',
-    },
-  }[endingType];
+  const endingCopy = activeBoard.endings[endingType];
 
   return (
     <div
@@ -1145,7 +1157,19 @@ export default function AppV2() {
       <div className="pointer-events-none fixed inset-0 noise-layer opacity-[0.035]" />
 
       {phase === 'TITLE' && (
-        <TitleScreenV2 onStartGame={() => setPhase('INTRO_STORY')} />
+        <TitleScreenV2 onStartGame={() => setPhase('BOARD_SELECT')} />
+      )}
+
+      {phase === 'BOARD_SELECT' && (
+        <BoardSelectScreen
+          selectedBoardId={selectedBoardId}
+          selectedMode={runMode}
+          progression={progression}
+          onSelectBoard={setSelectedBoardId}
+          onSelectMode={setRunMode}
+          onStart={startSelectedBoard}
+          onBack={returnToTitle}
+        />
       )}
 
       {phase === 'INTRO_STORY' && (
@@ -1161,23 +1185,23 @@ export default function AppV2() {
                     pre-stream transmission
                   </p>
                   <p className="mt-1 text-[11px] text-zinc-500">
-                    {INTRO_TEXTS[introStep].label}
+                    {activeBoard.intros[introStep].label}
                   </p>
                 </div>
               </div>
               <span className="font-mono text-[10px] text-zinc-600">
-                0{introStep + 1} / 0{INTRO_TEXTS.length}
+                0{introStep + 1} / 0{activeBoard.intros.length}
               </span>
             </header>
 
             <div className="intro-copy flex min-h-[250px] items-center py-10 md:min-h-[300px] md:px-7">
               <p className="font-serif text-lg font-semibold leading-[2] tracking-[0.04em] text-zinc-100 md:text-2xl">
-                {INTRO_TEXTS[introStep].text}
+                {activeBoard.intros[introStep].text}
               </p>
             </div>
 
             <div className="mb-5 flex gap-2">
-              {INTRO_TEXTS.map((item, index) => (
+              {activeBoard.intros.map((item, index) => (
                 <span
                   key={item.label}
                   className={`h-px flex-1 transition-colors duration-500 ${
@@ -1200,7 +1224,7 @@ export default function AppV2() {
                 onClick={advanceIntro}
                 className="group inline-flex min-h-11 items-center justify-center gap-3 border border-red-900 bg-[#0b0808] px-6 py-3 text-[10px] font-semibold tracking-[0.18em] text-zinc-200 transition hover:border-red-700 hover:bg-red-950/25 active:translate-y-px"
               >
-                {introStep < INTRO_TEXTS.length - 1 ? 'NEXT TRANSMISSION' : 'GO LIVE'}
+                {introStep < activeBoard.intros.length - 1 ? 'NEXT TRANSMISSION' : 'GO LIVE'}
                 <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
               </button>
             </footer>
@@ -1215,10 +1239,10 @@ export default function AppV2() {
             battery={Math.ceil(player.battery)}
             tension={Math.floor(player.tension)}
             health={Math.ceil(player.health)}
-            chapterTitle={CHAPTERS[chapterId - 1].title}
-            chapterSubtitle={CHAPTERS[chapterId - 1].subtitle}
+            chapterTitle={activeBoard.chapters[chapterId - 1].title}
+            chapterSubtitle={activeBoard.chapters[chapterId - 1].subtitle}
             chapterId={chapterId}
-            totalChapters={CHAPTERS.length}
+            totalChapters={activeBoard.chapters.length}
             progress={progress}
             onToggleMute={handleToggleMute}
             isMuted={isMuted}
@@ -1256,6 +1280,7 @@ export default function AppV2() {
             >
               <div className="playing-world">
                 <MainGameView
+                  key={`${runId}-main`}
                   player={player}
                   setPlayer={setPlayer}
                   anomalies={anomalies}
@@ -1267,6 +1292,16 @@ export default function AppV2() {
                   currentChapterId={chapterId}
                   onChapterComplete={handleChapterComplete}
                   onCaptureAnomaly={handleCaptureAnomaly}
+                  boardId={selectedBoardId}
+                  boardLabel={activeBoard.locationLabel}
+                  chapters={activeBoard.chapters}
+                  worldEnd={activeBoard.worldEnd}
+                  riskTier={riskTier}
+                  loopCount={routeLoopCount}
+                  batteryDrainMultiplier={modeDefinition.batteryDrainMultiplier}
+                  telegraphDurationMultiplier={modeDefinition.telegraphDurationMultiplier}
+                  activeWindowMultiplier={modeDefinition.activeWindowMultiplier}
+                  onAnomalyCue={handleAnomalyCue}
                   isPaused={isInterfacePaused}
                 />
 
@@ -1274,7 +1309,7 @@ export default function AppV2() {
                   <section className="current-objective" aria-label="現在の目的">
                     <div>
                       <p><Radio aria-hidden="true" /> CURRENT OBJECTIVE</p>
-                      <strong>{CHAPTERS[chapterId - 1].description}</strong>
+                      <strong>{activeBoard.chapters[chapterId - 1].description}</strong>
                     </div>
                     <div className="objective-evidence" aria-label="記録状況">
                       <span><Camera aria-hidden="true" /> {anomalies.filter((anomaly) => anomaly.captured).length}/{anomalies.length}</span>
@@ -1289,8 +1324,8 @@ export default function AppV2() {
 
               {showChapterCard && (
                 <div className="playing-chapter-toast">
-                  <p>CHECKPOINT {chapterId}/{CHAPTERS.length}</p>
-                  <strong>{CHAPTERS[chapterId - 1].subtitle}</strong>
+                  <p>CHECKPOINT {chapterId}/{activeBoard.chapters.length}</p>
+                  <strong>{activeBoard.chapters[chapterId - 1].subtitle}</strong>
                 </div>
               )}
             </div>
@@ -1301,6 +1336,7 @@ export default function AppV2() {
                 inert={isChatOpen ? true : undefined}
               >
                 <PipCameraV2
+                  key={`${runId}-pip`}
                   currentAnomaly={nearest.anomaly}
                   anomalyDistance={nearest.distance}
                   tension={player.tension}
@@ -1310,8 +1346,12 @@ export default function AppV2() {
                   player={player}
                   anomalies={anomalies}
                   items={items}
+                  boardId={selectedBoardId}
+                  runId={runId}
+                  loopCount={routeLoopCount}
                   riskTier={riskTier}
                   reducedMotion={prefersReducedMotion}
+                  isPaused={isInterfacePaused}
                 />
               </div>
 
@@ -1419,7 +1459,7 @@ export default function AppV2() {
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
               <button
                 type="button"
-                onClick={() => resetAll('INTRO_STORY')}
+                onClick={startSelectedBoard}
                 className="inline-flex min-h-11 flex-1 items-center justify-center gap-2 border border-red-900 bg-[#0b0808] px-5 py-3 text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-200 transition hover:border-red-700 hover:bg-red-950/25 active:translate-y-px"
               >
                 <RotateCcw className="h-4 w-4" />
@@ -1427,7 +1467,15 @@ export default function AppV2() {
               </button>
               <button
                 type="button"
-                onClick={() => resetAll('TITLE')}
+                onClick={returnToBoardSelect}
+                className="inline-flex min-h-11 items-center justify-center gap-2 border border-white/10 bg-black/30 px-5 py-3 text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-400 transition hover:border-white/20 hover:text-white"
+              >
+                <Radio className="h-4 w-4" />
+                boards
+              </button>
+              <button
+                type="button"
+                onClick={returnToTitle}
                 className="inline-flex min-h-11 items-center justify-center gap-2 border border-white/10 bg-black/30 px-5 py-3 text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-400 transition hover:border-white/20 hover:text-white"
               >
                 <Home className="h-4 w-4" />
@@ -1462,7 +1510,7 @@ export default function AppV2() {
             </button>
             <button
               type="button"
-              onClick={() => resetAll('TITLE')}
+              onClick={returnToTitle}
               className="mt-3 inline-flex items-center gap-2 px-4 py-2 font-mono text-[9px] uppercase tracking-[0.18em] text-zinc-600 transition hover:text-zinc-300"
             >
               return to title

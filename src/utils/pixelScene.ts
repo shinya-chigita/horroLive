@@ -1,12 +1,14 @@
-import { Anomaly, GameItem, PlayerState } from '../types';
+import { Anomaly, BoardId, GameItem, PlayerState, RiskTier } from '../types';
 import {
   getSceneDefinitionAt,
+  getSceneDefinitions,
+  getItemWorldPositions,
   HOSPITAL_ITEM_WORLD_POSITIONS,
-  HOSPITAL_SCENE_DEFINITIONS,
   ScenePalette,
   WorldPropDefinition,
 } from '../game/sceneDefinitions';
 import { isAnomalyRenderable } from '../game/anomalyDirector';
+import { getAnomalyVisualProfile } from '../game/anomalyPresentation';
 import { canonicalSceneHistory } from '../game/sceneSnapshot';
 import {
   createPlayerSpriteFrame,
@@ -32,6 +34,9 @@ export interface PixelSceneInput {
   mouse: { x: number; y: number };
   now: number;
   isMoving: boolean;
+  boardId?: BoardId;
+  riskTier?: RiskTier;
+  loopCount?: number;
   channel?: SceneRenderChannel;
   recordSnapshot?: boolean;
 }
@@ -270,11 +275,129 @@ function drawEmergencyExit(ctx: CanvasRenderingContext2D, screenX: number) {
   ctx.globalAlpha = 1;
 }
 
+function drawShoeLockers(
+  ctx: CanvasRenderingContext2D,
+  screenX: number,
+  columns: number,
+  palette: ScenePalette,
+) {
+  const x = Math.round(screenX);
+  const safeColumns = Math.max(3, Math.min(8, columns));
+  const cellWidth = 18;
+  const totalWidth = safeColumns * cellWidth;
+  if (x < -totalWidth || x > PIXEL_VIEW_WIDTH + totalWidth) return;
+  fillPixelRect(ctx, x - totalWidth / 2 - 3, 104, totalWidth + 6, 126, palette.wallDark);
+  for (let column = 0; column < safeColumns; column += 1) {
+    for (let row = 0; row < 4; row += 1) {
+      const cellX = x - totalWidth / 2 + column * cellWidth;
+      const cellY = 108 + row * 29;
+      const open = column === safeColumns - 2 && row === 2;
+      fillPixelRect(ctx, cellX, cellY, 16, 26, open ? '#080a08' : '#29302b');
+      fillPixelRect(ctx, cellX + 2, cellY + 4, 12, 1, palette.metal);
+      if (open) {
+        fillPixelRect(ctx, cellX + 13, cellY + 2, 7, 24, '#333b35');
+      } else {
+        fillPixelRect(ctx, cellX + 7, cellY + 17, 2, 2, '#757269');
+      }
+    }
+  }
+  ctx.globalAlpha = 0.32;
+  fillPixelRect(ctx, x - 37, 231, 13, 3, '#202720');
+  fillPixelRect(ctx, x + 16, 233, 17, 2, '#202720');
+  ctx.globalAlpha = 1;
+}
+
+function drawBlackboard(
+  ctx: CanvasRenderingContext2D,
+  screenX: number,
+  text: string,
+  palette: ScenePalette,
+) {
+  const x = Math.round(screenX);
+  if (x < -110 || x > PIXEL_VIEW_WIDTH + 110) return;
+  fillPixelRect(ctx, x - 78, 78, 156, 88, palette.wallDark);
+  fillPixelRect(ctx, x - 73, 83, 146, 76, '#14201b');
+  fillPixelRect(ctx, x - 80, 164, 160, 4, palette.metal);
+  ctx.save();
+  ctx.font = '10px serif';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#a7aaa0';
+  ctx.globalAlpha = 0.46;
+  ctx.fillText(text, x, 116);
+  ctx.font = '7px monospace';
+  ctx.fillText('0:13　日直：　　　　　', x - 7, 143);
+  ctx.restore();
+}
+
+function drawSchoolDesks(
+  ctx: CanvasRenderingContext2D,
+  screenX: number,
+  rows: number,
+  palette: ScenePalette,
+) {
+  const x = Math.round(screenX);
+  const safeRows = Math.max(1, Math.min(3, rows));
+  if (x < -130 || x > PIXEL_VIEW_WIDTH + 130) return;
+  for (let row = 0; row < safeRows; row += 1) {
+    const y = 181 + row * 18;
+    const width = 62 + row * 13;
+    const offset = row * 10;
+    fillPixelRect(ctx, x - width / 2 + offset, y, width, 5, '#4a3c2b');
+    fillPixelRect(ctx, x - width / 2 + offset + 4, y + 5, 3, 24, palette.metal);
+    fillPixelRect(ctx, x + width / 2 + offset - 7, y + 5, 3, 24, palette.metal);
+    fillPixelRect(ctx, x - width / 2 + offset + 10, y - 12, 26, 10, '#27231d');
+  }
+}
+
+function drawSpeaker(ctx: CanvasRenderingContext2D, screenX: number) {
+  const x = Math.round(screenX);
+  if (x < -50 || x > PIXEL_VIEW_WIDTH + 50) return;
+  fillPixelRect(ctx, x - 17, 48, 34, 28, '#252b29');
+  fillPixelRect(ctx, x - 13, 52, 26, 20, '#0b0e0d');
+  ctx.strokeStyle = '#4b514d';
+  ctx.globalAlpha = 0.55;
+  ctx.beginPath();
+  ctx.arc(x, 62, 8, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+  fillPixelRect(ctx, x - 1, 76, 2, 13, '#303735');
+}
+
+function drawStairs(
+  ctx: CanvasRenderingContext2D,
+  screenX: number,
+  palette: ScenePalette,
+) {
+  const x = Math.round(screenX);
+  if (x < -150 || x > PIXEL_VIEW_WIDTH + 150) return;
+  for (let step = 0; step < 7; step += 1) {
+    fillPixelRect(
+      ctx,
+      x - 80 + step * 15,
+      219 - step * 14,
+      100 - step * 7,
+      14,
+      step % 2 === 0 ? '#24211c' : '#1d1b17',
+    );
+    fillPixelRect(ctx, x - 80 + step * 15, 219 - step * 14, 100 - step * 7, 1, palette.metal);
+  }
+  ctx.strokeStyle = palette.metal;
+  ctx.globalAlpha = 0.65;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(x - 83, 184);
+  ctx.lineTo(x + 72, 73);
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+}
+
 function drawWorldProp(
   ctx: CanvasRenderingContext2D,
   prop: WorldPropDefinition,
   playerX: number,
   palette: ScenePalette,
+  channel: SceneRenderChannel,
+  boardDifferenceActive: boolean,
 ) {
   const screenX = worldToScreen(prop.worldX, playerX);
   switch (prop.kind) {
@@ -312,17 +435,45 @@ function drawWorldProp(
     case 'graffiti':
       drawGraffiti(ctx, screenX, prop.text, prop.color);
       break;
+    case 'shoe-lockers':
+      drawShoeLockers(ctx, screenX, prop.columns ?? 6, palette);
+      break;
+    case 'blackboard':
+      drawBlackboard(
+        ctx,
+        screenX,
+        channel === 'pip' && boardDifferenceActive && prop.pipText
+          ? prop.pipText
+          : prop.text,
+        palette,
+      );
+      break;
+    case 'school-desks':
+      drawSchoolDesks(ctx, screenX, prop.rows ?? 2, palette);
+      break;
+    case 'speaker':
+      drawSpeaker(ctx, screenX);
+      break;
+    case 'stairs':
+      drawStairs(ctx, screenX, palette);
+      break;
   }
 }
 
-function drawEnvironment(ctx: CanvasRenderingContext2D, playerX: number) {
+function drawEnvironment(
+  ctx: CanvasRenderingContext2D,
+  playerX: number,
+  boardId: BoardId,
+  channel: SceneRenderChannel,
+  boardDifferenceActive: boolean,
+) {
   const viewX = playerX - PIXEL_VIEW_WIDTH * 0.42;
-  const palette = getSceneDefinitionAt(playerX).palette;
+  const palette = getSceneDefinitionAt(playerX, boardId).palette;
   drawWallTexture(ctx, viewX, palette);
   drawFloor(ctx, viewX, palette);
   drawCeilingPipes(ctx, viewX, palette);
 
-  HOSPITAL_SCENE_DEFINITIONS.forEach((scene) => {
+  getSceneDefinitions(boardId).forEach((scene) => {
     scene.ambientLights.forEach((ambientLight) => {
       const x = worldToScreen(ambientLight.worldX, playerX);
       if (x < -110 || x > PIXEL_VIEW_WIDTH + 110) return;
@@ -337,13 +488,28 @@ function drawEnvironment(ctx: CanvasRenderingContext2D, playerX: number) {
       ctx.fillRect(x - radius - 10, 40, radius * 2 + 20, 160);
       ctx.globalAlpha = 1;
     });
-    scene.props.forEach((prop) => drawWorldProp(ctx, prop, playerX, scene.palette));
+    scene.props.forEach((prop) =>
+      drawWorldProp(
+        ctx,
+        prop,
+        playerX,
+        scene.palette,
+        channel,
+        boardDifferenceActive,
+      ),
+    );
   });
 }
 
-function drawItem(ctx: CanvasRenderingContext2D, item: GameItem, playerX: number, now: number) {
+function drawItem(
+  ctx: CanvasRenderingContext2D,
+  item: GameItem,
+  playerX: number,
+  now: number,
+  itemPositions: Readonly<Record<string, number>>,
+) {
   if (item.found) return;
-  const worldX = ITEM_WORLD_POSITIONS[item.id];
+  const worldX = itemPositions[item.id];
   if (worldX === undefined) return;
   const x = worldToScreen(worldX, playerX);
   if (x < -30 || x > PIXEL_VIEW_WIDTH + 30) return;
@@ -381,50 +547,76 @@ function drawAnomaly(
   player: PlayerState,
   now: number,
   channel: SceneRenderChannel,
+  riskTier: RiskTier,
+  loopCount: number,
 ) {
-  if (!isAnomalyRenderable(anomaly) || (channel === 'main' && anomaly.visibleOnlyInPip)) return;
-  const x = worldToScreen(anomaly.x, player.x);
+  if (!isAnomalyRenderable(anomaly)) return;
+  const profile = getAnomalyVisualProfile(anomaly, channel, riskTier);
+  if (!profile.visible) return;
+  const rawX = worldToScreen(anomaly.x, player.x);
+  const towardLens = rawX < PIXEL_VIEW_WIDTH / 2 ? 1 : -1;
+  const loopApproach =
+    channel === 'pip' && anomaly.id === 'school.anomaly.landing'
+      ? Math.min(42, Math.max(0, loopCount) * 12)
+      : 0;
+  const x = rawX + towardLens * (profile.approachOffsetPx + loopApproach);
   if (x < -90 || x > PIXEL_VIEW_WIDTH + 90) return;
   const distance = Math.abs(player.x - anomaly.x);
   const detectionRange = channel === 'pip' ? 680 : 520;
   const proximity = clamp((detectionRange - distance) / detectionRange, 0, 1);
   if (proximity <= 0) return;
-  const visible =
-    channel === 'pip'
-      ? anomaly.visibleOnlyInPip
-        ? 0.22 + proximity * 0.23
-        : 0.12 + proximity * 0.3
-      : player.flashlightOn
-        ? 0.08 + proximity * 0.38
-        : 0.035 + proximity * 0.12;
-  const phaseOpacity = anomaly.directorState?.phase === 'TELEGRAPH' ? 0.36 : 1;
   const y = PIXEL_FLOOR_Y - 64 + (anomaly.yOffset ?? 0);
   ctx.save();
-  ctx.globalAlpha = visible * phaseOpacity;
-  if (anomaly.type === 'orb') {
-    const pulse = 5 + Math.sin(now / 130) * 2;
-    const gradient = ctx.createRadialGradient(x, y, 1, x, y, 19 + pulse);
-    gradient.addColorStop(0, 'rgba(223,231,217,0.9)');
-    gradient.addColorStop(0.22, 'rgba(117,148,146,0.5)');
-    gradient.addColorStop(1, 'rgba(0,0,0,0)');
-    ctx.fillStyle = gradient;
-    ctx.fillRect(x - 28, y - 28, 56, 56);
-  } else if (anomaly.type === 'writing') {
-    ctx.font = 'bold 15px serif';
-    ctx.textAlign = 'center';
-    ctx.fillStyle = '#7c3029';
-    ctx.fillText('助　け　て', x, y + 18);
-  } else if (anomaly.type === 'doll') {
-    fillPixelRect(ctx, x - 6, y + 5, 12, 21, '#3d3330');
-    fillPixelRect(ctx, x - 7, y - 7, 14, 14, '#b0a38d');
-    fillPixelRect(ctx, x - 5, y - 2, 2, 2, '#121212');
-    fillPixelRect(ctx, x + 3, y - 2, 2, 2, '#121212');
-    fillPixelRect(ctx, x - 9, y - 10, 18, 5, '#17191a');
-  } else {
-    fillPixelRect(ctx, x - 11, y - 12, 22, 55, '#050505');
-    fillPixelRect(ctx, x - 8, y - 25, 16, 16, '#8a8980');
-    fillPixelRect(ctx, x - 5, y - 20, 2, 3, '#080808');
-    fillPixelRect(ctx, x + 3, y - 20, 2, 3, '#080808');
+  ctx.globalAlpha = profile.alpha * (0.45 + proximity * 0.55);
+  switch (profile.fragmentKind) {
+    case 'TRACE': {
+      const pulse = 0.75 + Math.sin(now / 420) * 0.08;
+      const visibleSteps = channel === 'main' ? 1 : 4;
+      for (let step = 0; step < visibleSteps; step += 1) {
+        const stepX = x - 25 + step * 16;
+        const stepY = Math.min(PIXEL_FLOOR_Y + 27, y + 42 + (step % 2) * 5);
+        ctx.globalAlpha = profile.alpha * pulse * (0.35 + step * 0.14);
+        fillPixelRect(ctx, stepX, stepY, 5, 9, '#6d8179');
+        fillPixelRect(ctx, stepX + (step % 2 ? -3 : 5), stepY + 7, 3, 3, '#87958c');
+      }
+      break;
+    }
+    case 'WRITING_FRAGMENT':
+      ctx.font = 'bold 14px serif';
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#783b34';
+      ctx.fillText(anomaly.id.startsWith('school.') ? '欠　席　　2' : '2 3 : 4', x, y + 17);
+      ctx.globalAlpha *= 0.55;
+      fillPixelRect(ctx, x + 30, y + 8, 9, 1, '#a7584d');
+      break;
+    case 'HEAD_AND_HAND':
+      // Only a crown of wet hair and fingers clear the foreground edge.
+      fillPixelRect(ctx, x - 12, y + 8, 24, 8, '#080909');
+      fillPixelRect(ctx, x - 9, y + 1, 18, 9, '#111312');
+      fillPixelRect(ctx, x - 15, y + 16, 3, 13, '#4e4b43');
+      fillPixelRect(ctx, x - 9, y + 17, 2, 15, '#5b574e');
+      fillPixelRect(ctx, x + 7, y + 18, 2, 14, '#554f47');
+      break;
+    case 'HAIR_AND_SHOULDER':
+      // The face remains outside the crop; silhouette and material carry the cue.
+      fillPixelRect(ctx, x - 18, y - 28, 31, 11, '#050606');
+      fillPixelRect(ctx, x - 15, y - 19, 25, 18, '#070808');
+      fillPixelRect(ctx, x - 17, y - 11, 4, 31, '#090a09');
+      fillPixelRect(ctx, x - 10, y - 7, 3, 37, '#0b0c0b');
+      fillPixelRect(ctx, x + 5, y - 12, 4, 26, '#0a0b0a');
+      fillPixelRect(ctx, x - 29, y + 16, 39, 13, '#101210');
+      fillPixelRect(ctx, x - 34, y + 23, 26, 9, '#0a0b0a');
+      break;
+    case 'FRAME_EDGE_SHADOW': {
+      const edgeX = x < PIXEL_VIEW_WIDTH / 2 ? Math.max(-2, x - 22) : Math.min(PIXEL_VIEW_WIDTH - 10, x + 8);
+      fillPixelRect(ctx, edgeX, y - 50, 18, 102, '#020303');
+      fillPixelRect(ctx, edgeX + (x < PIXEL_VIEW_WIDTH / 2 ? 14 : -10), y - 32, 15, 74, '#050606');
+      fillPixelRect(ctx, edgeX + (x < PIXEL_VIEW_WIDTH / 2 ? 7 : -5), y - 57, 14, 13, '#070808');
+      break;
+    }
+    case 'FULL_BODY':
+      // Intentionally unsupported for authored horror anomalies.
+      break;
   }
   ctx.restore();
 }
@@ -524,12 +716,16 @@ export function renderPixelScene({
   mouse,
   now,
   isMoving,
+  boardId = 'hospital',
+  riskTier = 0,
+  loopCount = 0,
   channel = 'main',
   recordSnapshot = channel === 'main',
 }: PixelSceneInput) {
   if (recordSnapshot) {
     canonicalSceneHistory.record({
       timestamp: now,
+      boardId,
       player,
       anomalies,
       items,
@@ -549,12 +745,38 @@ export function renderPixelScene({
     tension: player.tension,
   };
   const playerPose = getPlayerSpritePose(spriteInput);
-  drawEnvironment(ctx, player.x);
-  items.forEach((item) => drawItem(ctx, item, player.x, now));
-  anomalies.forEach((anomaly) => drawAnomaly(ctx, anomaly, player, now, channel));
-  drawFlashlightMask(ctx, player, mouse, channel, playerPose);
+  const itemPositions = getItemWorldPositions(boardId);
+  const boardDifferenceActive = anomalies.some(
+    (anomaly) =>
+      anomaly.id === 'school.anomaly.blackboard' &&
+      anomaly.directorState?.phase === 'ACTIVE' &&
+      !anomaly.captured &&
+      !anomaly.resolution,
+  );
+  drawEnvironment(
+    ctx,
+    player.x,
+    boardId,
+    channel,
+    boardDifferenceActive,
+  );
+  items.forEach((item) => drawItem(ctx, item, player.x, now, itemPositions));
+  anomalies.forEach((anomaly) =>
+    drawAnomaly(
+      ctx,
+      anomaly,
+      player,
+      now,
+      channel,
+      riskTier,
+      loopCount,
+    ),
+  );
   if (channel === 'main') {
     drawPixelCharacter(ctx, mouse, spriteInput);
+  }
+  drawFlashlightMask(ctx, player, mouse, channel, playerPose);
+  if (channel === 'main') {
     drawScreenNoise(ctx, now, player.tension);
   }
   ctx.restore();
@@ -562,7 +784,7 @@ export function renderPixelScene({
 
 export function renderTitleScene(ctx: CanvasRenderingContext2D, now: number) {
   const player: PlayerState = { x: 1840, speed: 1.8, isRunning: false, isCrouching: false, flashlightOn: true, flashlightAngle: 0, battery: 82, tension: 32, health: 100 };
-  const anomalies: Anomaly[] = [{ id: 'title-ghost', x: 2100, width: 55, type: 'ghost', description: 'camera-only apparition', points: 0, captured: false, visibleOnlyInPip: true, yOffset: 0 }];
+  const anomalies: Anomaly[] = [{ id: 'title-ghost', x: 2100, width: 55, type: 'ghost', description: 'camera-only apparition', points: 0, captured: false, visibleOnlyInPip: false, yOffset: 0, directorState: { anomalyId: 'title-ghost', phase: 'ACTIVE', resolution: null, phaseStartedAtMs: 0, transitionCount: 1, cycle: 0 } }];
   renderPixelScene({
     ctx,
     player,
@@ -571,6 +793,7 @@ export function renderTitleScene(ctx: CanvasRenderingContext2D, now: number) {
     mouse: { x: 535, y: 158 },
     now,
     isMoving: false,
+    riskTier: 2,
     recordSnapshot: false,
   });
 }

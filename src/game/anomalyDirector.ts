@@ -38,7 +38,7 @@ export interface AnomalyRuntimeObservation {
 
 const DEFAULT_RUNTIME_TIMING = {
   telegraphDistance: 520,
-  telegraphDurationMs: 520,
+  telegraphDurationMs: 1_650,
   activeWindowMs: 9_000,
   ignorePastDistance: 140,
   leaveDistance: 680,
@@ -46,9 +46,10 @@ const DEFAULT_RUNTIME_TIMING = {
   aftermathDurationMs: 760,
 } as const;
 
-const HOSPITAL_RUNTIME_DEFINITIONS: Readonly<
+const AUTHORED_RUNTIME_DEFINITIONS: Readonly<
   Record<string, Pick<AnomalyRuntimeDefinition, 'sceneId' | 'priority'> & Partial<AnomalyRuntimeDefinition>>
 > = {
+  // Legacy identifiers remain readable for old saved/test fixtures.
   ANOMALY_1: { sceneId: 'hospital-entry', priority: 10 },
   ANOMALY_2: { sceneId: 'hospital-ward-a', priority: 20 },
   ANOMALY_3: { sceneId: 'hospital-ward-a', priority: 10 },
@@ -59,6 +60,54 @@ const HOSPITAL_RUNTIME_DEFINITIONS: Readonly<
     priority: 10,
     telegraphDistance: 430,
     activeWindowMs: 11_000,
+  },
+  'hospital.anomaly.footsteps': { sceneId: 'hospital-entry', priority: 12 },
+  'hospital.anomaly.door-figure': {
+    sceneId: 'hospital-ward-a',
+    priority: 24,
+    telegraphDurationMs: 1_850,
+  },
+  'hospital.anomaly.2347': { sceneId: 'hospital-ward-a', priority: 10 },
+  'hospital.anomaly.wheelchair': {
+    sceneId: 'hospital-clinical-wing',
+    priority: 12,
+  },
+  'hospital.anomaly.ceiling': {
+    sceneId: 'hospital-signal-basement',
+    priority: 22,
+    telegraphDurationMs: 1_900,
+  },
+  'hospital.anomaly.altar-shadow': {
+    sceneId: 'hospital-altar',
+    priority: 20,
+    telegraphDistance: 430,
+    telegraphDurationMs: 2_050,
+    activeWindowMs: 11_000,
+  },
+  'school.anomaly.shoe-locker': {
+    sceneId: 'school-entrance',
+    priority: 12,
+  },
+  'school.anomaly.window-student': {
+    sceneId: 'school-classrooms',
+    priority: 24,
+    telegraphDurationMs: 1_850,
+  },
+  'school.anomaly.blackboard': {
+    sceneId: 'school-classrooms',
+    priority: 10,
+  },
+  'school.anomaly.microphone': {
+    sceneId: 'school-broadcast-room',
+    priority: 22,
+    telegraphDurationMs: 1_900,
+  },
+  'school.anomaly.landing': {
+    sceneId: 'school-stairwell',
+    priority: 25,
+    telegraphDistance: 560,
+    telegraphDurationMs: 2_100,
+    activeWindowMs: 10_500,
   },
 };
 
@@ -146,7 +195,7 @@ export function getAnomalyRuntimeDefinition(
   anomalyId: string,
   fallbackSceneId: string,
 ): AnomalyRuntimeDefinition {
-  const authored = HOSPITAL_RUNTIME_DEFINITIONS[anomalyId];
+  const authored = AUTHORED_RUNTIME_DEFINITIONS[anomalyId];
   return {
     anomalyId,
     sceneId: authored?.sceneId ?? fallbackSceneId,
