@@ -26,7 +26,7 @@ const GAMEPLAY_PILLARS = [
     icon: ArrowLeftRight,
     code: '01 / EXPLORE',
     title: '暗闇を歩く',
-    description: '光が届く範囲だけを頼りに、封鎖された病棟を進む。',
+    description: '光が届く範囲だけを頼りに、病棟と旧校舎を進む。',
   },
   {
     icon: Camera,
@@ -124,12 +124,14 @@ function ReferencePreview() {
         <path d="M330 262 L696 151 L696 341 L330 274 Z" fill="url(#title-beam)" />
         <rect x="342" y="267" width="240" height="3" fill="#c6b58c" opacity="0.13" />
 
-        <g opacity="0.19">
-          <rect x="616" y="139" width="20" height="23" fill="#d4d3c8" />
-          <rect x="608" y="163" width="37" height="92" fill="#1a1b19" />
-          <rect x="603" y="204" width="47" height="61" fill="#10110f" />
-          <rect x="621" y="145" width="3" height="6" fill="#080908" />
-          <rect x="630" y="145" width="3" height="6" fill="#080908" />
+        <g opacity="0.26">
+          <rect x="620" y="128" width="18" height="14" fill="#080908" />
+          <rect x="617" y="139" width="23" height="42" fill="#090a09" />
+          <rect x="613" y="151" width="4" height="43" fill="#0b0c0b" />
+          <rect x="621" y="159" width="3" height="47" fill="#0d0e0d" />
+          <rect x="632" y="147" width="4" height="37" fill="#0a0b0a" />
+          <rect x="602" y="187" width="35" height="16" fill="#111210" />
+          <rect x="596" y="198" width="23" height="10" fill="#090a09" />
         </g>
 
         <ReferenceCharacter />
@@ -165,7 +167,7 @@ function ReferencePreview() {
 export default function TitleScreenV2({ onStartGame }: TitleScreenV2Props) {
   const handleStart = () => {
     AudioSynth.init();
-    AudioSynth.playStinger();
+    AudioSynth.playNotification();
     onStartGame();
   };
 
@@ -182,14 +184,14 @@ export default function TitleScreenV2({ onStartGame }: TitleScreenV2Props) {
               見えていないのは、<span className="text-red-700">こっち</span>かもしれない。
             </p>
             <p className="mt-2 font-mono text-[8px] uppercase tracking-[0.18em] text-zinc-600 sm:text-[9px]">
-              2Dスクロールホラーアドベンチャー　｜　ライブ配信しながら探索する心霊廃墟
+              2Dスクロールホラーアドベンチャー　｜　ライブ配信しながら複数の心霊盤面を探索
             </p>
           </div>
           <div className="hidden shrink-0 text-right sm:block">
             <div className="flex items-center justify-end gap-2 font-mono text-[8px] uppercase tracking-[0.16em] text-red-700">
               <span className="h-1.5 w-1.5 bg-red-700" /> live system
             </div>
-            <p className="mt-2 font-mono text-[8px] text-zinc-700">HORROLIVE / SIGNAL BUILD 3.1</p>
+            <p className="mt-2 font-mono text-[8px] text-zinc-700">HORROLIVE / SIGNAL BUILD 3.2</p>
           </div>
         </header>
 
@@ -212,7 +214,7 @@ export default function TitleScreenV2({ onStartGame }: TitleScreenV2Props) {
                 <br />三つの視界は、同じものを映さない。
               </h2>
               <p className="mt-4 max-w-xl text-xs leading-7 text-zinc-600 sm:text-sm">
-                封鎖された廃病院を配信しながら探索し、映像にだけ残る怪異を記録する。
+                廃病院と下校放送の止まらない旧校舎を選び、映像にだけ残る怪異を記録する。
                 視聴者の警告を信じるか、撮れ高を優先するか。配信を終えられるかどうかは、あなたの視線にかかっている。
               </p>
             </div>
@@ -228,7 +230,7 @@ export default function TitleScreenV2({ onStartGame }: TitleScreenV2Props) {
                 </span>
                 <span>
                   <span className="block font-mono text-[7px] uppercase tracking-[0.22em] text-red-800">channel ready / 23:47</span>
-                  <span className="mt-1 block text-sm font-semibold tracking-[0.17em] text-zinc-200">配信を開始する</span>
+                  <span className="mt-1 block text-sm font-semibold tracking-[0.17em] text-zinc-200">配信盤面を選ぶ</span>
                 </span>
               </span>
               <ChevronRight className="h-5 w-5 text-zinc-300 transition-transform group-hover:translate-x-1" />

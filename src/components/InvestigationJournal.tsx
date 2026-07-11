@@ -45,37 +45,37 @@ function AnomalyThumbnail({ anomaly }: { anomaly: Anomaly }) {
       <div className="absolute right-[24%] top-0 h-full w-px bg-white/[0.04]" />
 
       {anomaly.type === 'ghost' && (
-        <div className="relative h-12 w-7 opacity-55">
-          <div className="mx-auto h-4 w-4 bg-zinc-400/55" />
-          <div className="mx-auto h-8 w-7 bg-zinc-900/90" />
-          <span className="absolute left-[7px] top-[6px] h-1 w-1 bg-black" />
-          <span className="absolute right-[7px] top-[6px] h-1 w-1 bg-black" />
+        <div className="absolute -right-1 top-3 h-14 w-10 opacity-60">
+          <div className="ml-auto h-7 w-6 bg-black" />
+          <div className="ml-auto h-9 w-1.5 -translate-x-1 bg-zinc-950" />
+          <div className="absolute right-0 top-7 h-4 w-9 bg-zinc-950" />
         </div>
       )}
 
       {anomaly.type === 'shadow' && (
-        <div className="relative h-14 w-12 bg-black opacity-90 shadow-[0_0_24px_rgba(0,0,0,0.95)]">
-          <span className="absolute left-3 top-4 h-1 w-1 bg-red-900" />
-          <span className="absolute right-3 top-4 h-1 w-1 bg-red-900" />
-        </div>
+        <div className="absolute -left-2 inset-y-0 w-8 bg-black opacity-90 shadow-[10px_0_24px_rgba(0,0,0,0.95)]" />
       )}
 
       {anomaly.type === 'writing' && (
         <p className="rotate-[-3deg] font-serif text-xs font-bold tracking-[0.22em] text-red-900/75">
-          助　ケ　テ
+          {anomaly.id.startsWith('school.') ? '欠　席　2' : '2 3 : 4'}
         </p>
       )}
 
       {anomaly.type === 'orb' && (
-        <div className="h-5 w-5 bg-zinc-200/75 shadow-[0_0_22px_rgba(203,213,225,0.45)]" />
+        <div className="flex rotate-[-12deg] gap-2 opacity-55">
+          <span className="h-3 w-1.5 bg-zinc-500" />
+          <span className="mt-2 h-3 w-1.5 bg-zinc-600" />
+          <span className="mt-4 h-3 w-1.5 bg-zinc-700" />
+        </div>
       )}
 
       {anomaly.type === 'doll' && (
-        <div className="relative h-12 w-6">
-          <div className="mx-auto h-4 w-4 bg-[#9e8f7e]" />
-          <div className="mx-auto h-8 w-6 bg-[#352c29]" />
-          <span className="absolute left-[7px] top-[6px] h-1 w-1 bg-black" />
-          <span className="absolute right-[7px] top-[6px] h-1 w-1 bg-black" />
+        <div className="relative mt-7 h-8 w-10 opacity-65">
+          <div className="mx-auto h-3 w-6 bg-black" />
+          <span className="absolute left-0 top-3 h-4 w-1 bg-zinc-600" />
+          <span className="absolute left-2 top-3 h-5 w-1 bg-zinc-700" />
+          <span className="absolute right-2 top-3 h-5 w-1 bg-zinc-700" />
         </div>
       )}
 

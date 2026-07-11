@@ -1,5 +1,5 @@
-import { Anomaly, GameItem, PlayerState } from '../types';
-import { getSceneDefinitionAt } from './sceneDefinitions';
+import type { Anomaly, BoardId, GameItem, PlayerState } from '../types.ts';
+import { getSceneDefinitionAt } from './sceneDefinitions.ts';
 
 export interface ScenePointer {
   x: number;
@@ -8,6 +8,7 @@ export interface ScenePointer {
 
 export interface SceneSnapshot {
   timestamp: number;
+  boardId: BoardId;
   sceneId: string;
   player: PlayerState;
   anomalies: Anomaly[];
@@ -18,6 +19,7 @@ export interface SceneSnapshot {
 
 export interface SceneSnapshotInput {
   timestamp: number;
+  boardId: BoardId;
   player: PlayerState;
   anomalies: Anomaly[];
   items: GameItem[];
@@ -28,7 +30,8 @@ export interface SceneSnapshotInput {
 export function createSceneSnapshot(input: SceneSnapshotInput): SceneSnapshot {
   return {
     timestamp: input.timestamp,
-    sceneId: getSceneDefinitionAt(input.player.x).id,
+    boardId: input.boardId,
+    sceneId: getSceneDefinitionAt(input.player.x, input.boardId).id,
     player: { ...input.player },
     anomalies: input.anomalies.map((anomaly) => ({ ...anomaly })),
     items: input.items.map((item) => ({ ...item })),
@@ -43,11 +46,13 @@ export function createSceneSnapshot(input: SceneSnapshotInput): SceneSnapshot {
  */
 export class SceneSnapshotHistory {
   private snapshots: SceneSnapshot[] = [];
+  private readonly retentionMs: number;
+  private readonly maxSamples: number;
 
-  constructor(
-    private readonly retentionMs = 2600,
-    private readonly maxSamples = 180,
-  ) {}
+  constructor(retentionMs = 2600, maxSamples = 180) {
+    this.retentionMs = retentionMs;
+    this.maxSamples = maxSamples;
+  }
 
   record(input: SceneSnapshotInput): SceneSnapshot {
     const snapshot = createSceneSnapshot(input);
@@ -56,6 +61,7 @@ export class SceneSnapshotHistory {
     if (
       previous &&
       (snapshot.timestamp < previous.timestamp ||
+        snapshot.boardId !== previous.boardId ||
         Math.abs(snapshot.player.x - previous.player.x) > 1200)
     ) {
       this.snapshots = [];

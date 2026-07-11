@@ -12,7 +12,17 @@ export interface Comment {
   badge?: 'mod' | 'subscriber' | 'supporter';
 }
 
-export type GamePhase = 'TITLE' | 'INTRO_STORY' | 'PLAYING' | 'ENDING' | 'GAMEOVER';
+export type BoardId = 'hospital' | 'school';
+
+export type RunMode = 'STANDARD' | 'DEEP_BROADCAST';
+
+export type GamePhase =
+  | 'TITLE'
+  | 'BOARD_SELECT'
+  | 'INTRO_STORY'
+  | 'PLAYING'
+  | 'ENDING'
+  | 'GAMEOVER';
 
 export type EndingType = 'OVER_EXPLOITED' | 'ESCAPED' | 'LOST_ARCHIVE';
 
