@@ -193,7 +193,7 @@ export default function TitleScreenV2({ onStartGame }: TitleScreenV2Props) {
             <div className="flex items-center justify-end gap-2 font-mono text-[8px] uppercase tracking-[0.16em] text-red-700">
               <span className="h-1.5 w-1.5 bg-red-700" /> live system
             </div>
-            <p className="mt-2 font-mono text-[8px] text-zinc-700">HORROLIVE / BUILD 0.3</p>
+            <p className="mt-2 font-mono text-[8px] text-zinc-700">HORROLIVE / SIGNAL BUILD 3.1</p>
           </div>
         </header>
 
@@ -224,15 +224,15 @@ export default function TitleScreenV2({ onStartGame }: TitleScreenV2Props) {
             <button
               type="button"
               onClick={handleStart}
-              className="group mt-8 flex w-full max-w-md items-center justify-between border border-red-800 bg-red-900/80 px-5 py-4 text-left transition hover:border-red-600 hover:bg-red-800 active:translate-y-px"
+              className="group mt-8 flex min-h-11 w-full max-w-md items-center justify-between border border-red-950 bg-[#090807] px-5 py-3 text-left transition hover:border-red-800 hover:bg-red-950/20 active:translate-y-px"
             >
               <span className="flex items-center gap-4">
-                <span className="flex h-9 w-9 items-center justify-center border border-white/16 bg-black/20">
-                  <Radio className="h-4 w-4 text-zinc-100" />
+                <span className="flex h-9 w-9 items-center justify-center border border-white/10 bg-black">
+                  <Radio className="h-4 w-4 text-red-800" />
                 </span>
                 <span>
-                  <span className="block font-mono text-[7px] uppercase tracking-[0.22em] text-red-200/55">channel ready / 23:47</span>
-                  <span className="mt-1 block text-sm font-black tracking-[0.17em] text-white">配信を開始する</span>
+                  <span className="block font-mono text-[7px] uppercase tracking-[0.22em] text-red-800">channel ready / 23:47</span>
+                  <span className="mt-1 block text-sm font-semibold tracking-[0.17em] text-zinc-200">配信を開始する</span>
                 </span>
               </span>
               <ChevronRight className="h-5 w-5 text-zinc-300 transition-transform group-hover:translate-x-1" />

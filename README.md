@@ -8,7 +8,9 @@
 
 - **配信画面そのものがゲームUI** — 同時接続数、コメント、映像ノイズ、回線状態が物語と連動します。
 - **二つの視点** — メイン画面と配信用PIPカメラで、見えるものが異なります。
+- **遅延する第二の真実** — PIPは同じ世界状態を400〜700ms遅れて映し、カメラにしか現れない怪異を含みます。
 - **動的な恐怖演出** — プレイヤーの位置、ライト、緊張度に応じてコメント、音、映像が変化します。
+- **視聴者数＝リスク** — 237 → 2,370 → 23,700 → 237,000の段階で配信への侵食が強くなります。
 - **記録と分岐** — 怪異の撮影数、発見した手掛かり、最終視聴者数によって結末が変わります。
 - **PC・タッチ操作対応** — キーボードに加え、画面上の操作ボタンでも進行できます。
 
@@ -40,6 +42,7 @@ npm run dev
 
 ```bash
 npm run lint
+npm test
 npm run build
 ```
 
@@ -55,7 +58,9 @@ npm run build
 - Web Audio API
 - lucide-react
 
-ゲーム進行と配信状態は `src/AppV2.tsx`、リアルタイムの探索描画は `src/components/MainGameView.tsx`、PIP映像と音響はそれぞれ専用コンポーネント／ユーティリティに分離しています。
+ゲーム進行と配信状態は `src/AppV2.tsx`、リアルタイムの探索描画は `src/components/MainGameView.tsx`、PIP映像と音響はそれぞれ専用コンポーネント／ユーティリティに分離しています。MainとPIPは `src/game/sceneSnapshot.ts` の共通SceneSnapshot履歴を使い、背景・設備は `src/game/sceneDefinitions.ts` でデータ定義しています。
+
+設計の基準は [Art Direction v3.1](docs/ART_DIRECTION_V3_1.md)、画面構造は [Wireframes v3.1](docs/WIREFRAMES_V3_1.md) を参照してください。
 
 ## デプロイ
 
@@ -63,7 +68,7 @@ GitHub Actions から Cloudflare Pages へ自動デプロイします。
 
 - `main` へのpush: 本番デプロイ
 - Pull Request: ブランチごとのプレビューデプロイ
-- Build command: `npm run build`
+- Quality gate: `npm run lint` → `npm test` → `npm run build`
 - Output directory: `dist`
 
 初回のみ、リポジトリのActions secretsに以下を登録してください。

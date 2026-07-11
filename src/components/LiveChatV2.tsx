@@ -3,7 +3,16 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { memo, useEffect, useMemo, useRef, useState } from 'react';
+import React, {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+} from 'react';
 import {
   ArrowDown,
   Award,
@@ -14,15 +23,23 @@ import {
   SignalLow,
   WifiOff,
 } from 'lucide-react';
-import { Comment } from '../types';
+import type { Comment } from '../types';
+import type { ChatFollowMode } from '../game/chatFollow';
+import {
+  chatFollowReducer,
+  countAddedMessageIds,
+  getChatFollowMode,
+} from '../game/chatFollow';
 import { AudioSynth } from '../utils/audio';
 
 interface LiveChatV2Props {
   comments: Comment[];
-  onAddComment: (text: string, isPlayer: boolean) => void;
+  onAddComment?: (text: string, isPlayer: boolean) => void;
   signalBlocked: boolean;
   flashlightOn: boolean;
   isRunning: boolean;
+  /** The hospital vertical slice is narrative-only; legacy screens may opt in to posting. */
+  readOnly?: boolean;
 }
 
 const USER_POOL = [
@@ -92,48 +109,68 @@ function LiveChatV2({
   signalBlocked,
   flashlightOn,
   isRunning,
+  readOnly = false,
 }: LiveChatV2Props) {
   const [inputText, setInputText] = useState('');
   const [isViewerTyping, setIsViewerTyping] = useState(false);
-  const [isFollowing, setIsFollowing] = useState(true);
-  const [unreadCount, setUnreadCount] = useState(0);
+  const [followState, dispatchFollow] = useReducer(chatFollowReducer, {
+    mode: 'FOLLOWING',
+    unreadCount: 0,
+  });
+  const [pausedWindowStartId, setPausedWindowStartId] = useState<string | null>(null);
   const scrollViewportRef = useRef<HTMLDivElement | null>(null);
   const pendingTimersRef = useRef<number[]>([]);
-  const atBottomRef = useRef(true);
-  const previousLatestIdRef = useRef<string | null>(null);
+  const followModeRef = useRef<ChatFollowMode>('FOLLOWING');
+  const pausedScrollTopRef = useRef(0);
+  const previousCommentIdsRef = useRef<readonly string[]>([]);
   const hasMountedRef = useRef(false);
 
-  const visibleComments = useMemo(() => comments.slice(-80), [comments]);
-  const latestCommentId = visibleComments.at(-1)?.id ?? null;
+  const isFollowing = followState.mode === 'FOLLOWING';
+  const unreadCount = followState.unreadCount;
+  const commentIds = useMemo(() => comments.map((comment) => comment.id), [comments]);
+  const visibleComments = useMemo(() => {
+    if (followState.mode === 'PAUSED' && pausedWindowStartId) {
+      const startIndex = comments.findIndex((comment) => comment.id === pausedWindowStartId);
+      if (startIndex >= 0) return comments.slice(startIndex);
+    }
+    return comments.slice(-80);
+  }, [comments, followState.mode, pausedWindowStartId]);
 
-  const scrollToBottom = (behavior: ScrollBehavior = 'smooth') => {
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
     const viewport = scrollViewportRef.current;
     if (!viewport) return;
     viewport.scrollTo({ top: viewport.scrollHeight, behavior });
-    atBottomRef.current = true;
-    setIsFollowing(true);
-    setUnreadCount(0);
-  };
+    followModeRef.current = 'FOLLOWING';
+    pausedScrollTopRef.current = viewport.scrollHeight;
+    setPausedWindowStartId(null);
+    dispatchFollow({ type: 'FOLLOW_REQUESTED' });
+  }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const viewport = scrollViewportRef.current;
     if (!viewport) return;
+
     if (!hasMountedRef.current) {
       hasMountedRef.current = true;
-      previousLatestIdRef.current = latestCommentId;
-      window.requestAnimationFrame(() => scrollToBottom('auto'));
+      previousCommentIdsRef.current = commentIds;
+      scrollToBottom('auto');
       return;
     }
-    if (latestCommentId && latestCommentId !== previousLatestIdRef.current) {
-      if (atBottomRef.current) {
-        const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-        window.requestAnimationFrame(() => scrollToBottom(reducedMotion ? 'auto' : 'smooth'));
-      } else {
-        setUnreadCount((previous) => Math.min(99, previous + 1));
-      }
-      previousLatestIdRef.current = latestCommentId;
+
+    const addedCount = countAddedMessageIds(previousCommentIdsRef.current, commentIds);
+    previousCommentIdsRef.current = commentIds;
+    if (addedCount === 0) return;
+
+    if (followModeRef.current === 'FOLLOWING') {
+      scrollToBottom('auto');
+    } else {
+      // Appending rows must not move someone who is reading older messages.
+      // The paused render window is not pruned, and this assignment also
+      // neutralises browser scroll anchoring differences.
+      viewport.scrollTop = pausedScrollTopRef.current;
+      dispatchFollow({ type: 'MESSAGES_ADDED', count: addedCount });
     }
-  }, [latestCommentId]);
+  }, [commentIds, scrollToBottom]);
 
   useEffect(
     () => () => {
@@ -146,11 +183,23 @@ function LiveChatV2({
   const handleScroll = () => {
     const viewport = scrollViewportRef.current;
     if (!viewport) return;
-    const distanceFromBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
-    const nearBottom = distanceFromBottom <= 42;
-    atBottomRef.current = nearBottom;
-    setIsFollowing(nearBottom);
-    if (nearBottom) setUnreadCount(0);
+    const metrics = {
+      scrollHeight: viewport.scrollHeight,
+      scrollTop: viewport.scrollTop,
+      clientHeight: viewport.clientHeight,
+    };
+    const previousMode = followModeRef.current;
+    const nextMode = getChatFollowMode(metrics);
+
+    followModeRef.current = nextMode;
+    pausedScrollTopRef.current = viewport.scrollTop;
+    dispatchFollow({ type: 'SCROLLED', metrics });
+
+    if (nextMode === 'PAUSED' && previousMode === 'FOLLOWING') {
+      setPausedWindowStartId(visibleComments[0]?.id ?? null);
+    } else if (nextMode === 'FOLLOWING' && previousMode === 'PAUSED') {
+      setPausedWindowStartId(null);
+    }
   };
 
   const stopGameHotkeys = (event: React.SyntheticEvent) => {
@@ -161,7 +210,7 @@ function LiveChatV2({
     event.preventDefault();
     event.stopPropagation();
     const text = inputText.trim();
-    if (!text || signalBlocked) return;
+    if (!text || signalBlocked || readOnly || !onAddComment) return;
     onAddComment(text, true);
     setInputText('');
     setIsViewerTyping(true);
@@ -200,9 +249,13 @@ function LiveChatV2({
       <div
         ref={scrollViewportRef}
         onScroll={handleScroll}
-        className="relative z-10 flex-1 overflow-y-auto [scrollbar-gutter:stable]"
+        className="relative z-10 flex-1 overflow-y-auto [overflow-anchor:none] [scrollbar-gutter:stable]"
+        role="log"
         aria-live={isFollowing ? 'polite' : 'off'}
+        aria-relevant="additions text"
+        aria-atomic="false"
         aria-label="ライブコメント"
+        tabIndex={0}
       >
         <div className="divide-y divide-white/[0.055] px-3">
           {visibleComments.map((comment) => {
@@ -247,8 +300,8 @@ function LiveChatV2({
       {!isFollowing && unreadCount > 0 && (
         <button
           type="button"
-          onClick={() => scrollToBottom('smooth')}
-          className="absolute bottom-[62px] left-1/2 z-30 flex -translate-x-1/2 items-center gap-2 border border-white/15 bg-[#090909]/95 px-3 py-2 font-mono text-[8px] tracking-[0.1em] text-zinc-300 shadow-[0_8px_24px_rgba(0,0,0,0.7)] transition hover:border-white/30 hover:text-white"
+          onClick={() => scrollToBottom('auto')}
+          className={`absolute left-1/2 z-30 flex -translate-x-1/2 items-center gap-2 border border-white/15 bg-[#090909]/95 px-3 py-2 font-mono text-[8px] tracking-[0.1em] text-zinc-300 shadow-[0_8px_24px_rgba(0,0,0,0.7)] transition hover:border-white/30 hover:text-white ${readOnly ? 'bottom-10' : 'bottom-[62px]'}`}
           aria-label={`新着コメント${unreadCount}件を表示`}
         >
           新着 {unreadCount}件
@@ -256,42 +309,52 @@ function LiveChatV2({
         </button>
       )}
 
-      <form
-        onSubmit={handleSubmit}
-        onKeyDown={stopGameHotkeys}
-        onKeyUp={stopGameHotkeys}
-        onPointerDown={stopGameHotkeys}
-        className="relative z-20 border-t border-white/10 bg-[#060606] p-2.5"
-      >
-        {signalBlocked && (
-          <div className="mb-2 flex items-center gap-2 border border-red-900/40 bg-red-950/15 px-2.5 py-2 text-[8px] text-red-700">
-            <SignalLow className="h-3 w-3 shrink-0" />
-            精神侵食によりコメント回線が遮断されています。
-          </div>
-        )}
-        <div className="flex gap-2">
-          <input
-            type="text"
-            value={inputText}
-            onChange={(event: React.ChangeEvent<HTMLInputElement>) => setInputText(event.target.value)}
-            onKeyDown={stopGameHotkeys}
-            onKeyUp={stopGameHotkeys}
-            maxLength={48}
-            disabled={signalBlocked}
-            placeholder={signalBlocked ? 'SIGNAL LOST...' : 'コメントを入力…'}
-            aria-label="配信コメント"
-            className="min-w-0 flex-1 border border-white/10 bg-black/50 px-3 py-2 text-[10px] text-zinc-200 outline-none transition placeholder:text-zinc-800 hover:border-white/18 focus:border-zinc-500/50 disabled:cursor-not-allowed disabled:opacity-50"
-          />
-          <button
-            type="submit"
-            disabled={!inputText.trim() || signalBlocked}
-            aria-label="コメントを送信"
-            className="inline-flex h-9 w-10 shrink-0 items-center justify-center border border-white/12 bg-white/[0.035] text-zinc-400 transition hover:border-white/25 hover:text-white active:translate-y-px disabled:cursor-not-allowed disabled:border-white/5 disabled:text-zinc-800"
-          >
-            <Send className="h-3.5 w-3.5" />
-          </button>
+      {readOnly ? (
+        <div
+          className="relative z-20 flex min-h-8 items-center justify-between border-t border-white/10 bg-[#060606] px-3 font-mono text-[7px] uppercase tracking-[0.14em] text-zinc-700"
+          aria-label="コメントは読み取り専用です"
+        >
+          <span>narrative feed</span>
+          <span>{signalBlocked ? 'signal lost' : 'read only'}</span>
         </div>
-      </form>
+      ) : (
+        <form
+          onSubmit={handleSubmit}
+          onKeyDown={stopGameHotkeys}
+          onKeyUp={stopGameHotkeys}
+          onPointerDown={stopGameHotkeys}
+          className="relative z-20 border-t border-white/10 bg-[#060606] p-2.5"
+        >
+          {signalBlocked && (
+            <div className="mb-2 flex items-center gap-2 border border-red-900/40 bg-red-950/15 px-2.5 py-2 text-[8px] text-red-700">
+              <SignalLow className="h-3 w-3 shrink-0" />
+              精神侵食によりコメント回線が遮断されています。
+            </div>
+          )}
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={inputText}
+              onChange={(event: React.ChangeEvent<HTMLInputElement>) => setInputText(event.target.value)}
+              onKeyDown={stopGameHotkeys}
+              onKeyUp={stopGameHotkeys}
+              maxLength={48}
+              disabled={signalBlocked || !onAddComment}
+              placeholder={signalBlocked ? 'SIGNAL LOST...' : 'コメントを入力…'}
+              aria-label="配信コメント"
+              className="min-w-0 flex-1 border border-white/10 bg-black/50 px-3 py-2 text-[10px] text-zinc-200 outline-none transition placeholder:text-zinc-800 hover:border-white/18 focus:border-zinc-500/50 disabled:cursor-not-allowed disabled:opacity-50"
+            />
+            <button
+              type="submit"
+              disabled={!inputText.trim() || signalBlocked || !onAddComment}
+              aria-label="コメントを送信"
+              className="inline-flex h-9 w-10 shrink-0 items-center justify-center border border-white/12 bg-white/[0.035] text-zinc-400 transition hover:border-white/25 hover:text-white active:translate-y-px disabled:cursor-not-allowed disabled:border-white/5 disabled:text-zinc-800"
+            >
+              <Send className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </form>
+      )}
     </section>
   );
 }

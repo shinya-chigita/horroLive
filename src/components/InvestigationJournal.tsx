@@ -12,6 +12,7 @@ import {
   Image as ImageIcon,
   KeyRound,
   TriangleAlert,
+  X,
 } from 'lucide-react';
 import { Anomaly, GameItem } from '../types';
 
@@ -19,6 +20,7 @@ interface InvestigationJournalProps {
   items: GameItem[];
   anomalies: Anomaly[];
   logs: string[];
+  onClose?: () => void;
 }
 
 type JournalTab = 'ITEMS' | 'LOGS' | 'PHOTOS';
@@ -89,6 +91,7 @@ export default function InvestigationJournal({
   items,
   anomalies,
   logs,
+  onClose,
 }: InvestigationJournalProps) {
   const [activeTab, setActiveTab] = useState<JournalTab>('ITEMS');
   const foundItems = items.filter((item) => item.found);
@@ -138,6 +141,19 @@ export default function InvestigationJournal({
             );
           })}
         </nav>
+
+        {onClose && (
+          <button
+            type="button"
+            onClick={onClose}
+            autoFocus
+            className="flex min-h-11 min-w-11 shrink-0 items-center justify-center border-l border-white/10 text-zinc-600 transition hover:bg-white/[0.035] hover:text-zinc-200"
+            aria-label="調査記録を閉じる"
+            title="閉じる (Esc)"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        )}
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">

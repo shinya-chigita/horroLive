@@ -1,17 +1,24 @@
 import { Anomaly, GameItem, PlayerState } from '../types';
+import {
+  getSceneDefinitionAt,
+  HOSPITAL_ITEM_WORLD_POSITIONS,
+  HOSPITAL_SCENE_DEFINITIONS,
+  ScenePalette,
+  WorldPropDefinition,
+} from '../game/sceneDefinitions';
+import { isAnomalyRenderable } from '../game/anomalyDirector';
+import { canonicalSceneHistory } from '../game/sceneSnapshot';
 
 export const PIXEL_VIEW_WIDTH = 640;
 export const PIXEL_VIEW_HEIGHT = 300;
 export const PIXEL_FLOOR_Y = 238;
 
-export const ITEM_WORLD_POSITIONS: Record<string, number> = {
-  KEYCARD_BLUE: 1450,
-  DIARY_1: 800,
-  DIARY_2: 3100,
-  PHOTO_OLD: 4750,
-};
+export const ITEM_WORLD_POSITIONS: Readonly<Record<string, number>> =
+  HOSPITAL_ITEM_WORLD_POSITIONS;
 
-interface PixelSceneInput {
+export type SceneRenderChannel = 'main' | 'pip';
+
+export interface PixelSceneInput {
   ctx: CanvasRenderingContext2D;
   player: PlayerState;
   anomalies: Anomaly[];
@@ -19,26 +26,9 @@ interface PixelSceneInput {
   mouse: { x: number; y: number };
   now: number;
   isMoving: boolean;
+  channel?: SceneRenderChannel;
+  recordSnapshot?: boolean;
 }
-
-interface ScenePalette {
-  wall: string;
-  wallDark: string;
-  wallLine: string;
-  floor: string;
-  floorLine: string;
-  metal: string;
-  stain: string;
-  lamp: string;
-}
-
-const palettes: ScenePalette[] = [
-  { wall: '#171a18', wallDark: '#0d100f', wallLine: '#252925', floor: '#151715', floorLine: '#262823', metal: '#3d413c', stain: '#3a2921', lamp: '#c7ad7b' },
-  { wall: '#191713', wallDark: '#0e0d0b', wallLine: '#2b2821', floor: '#171510', floorLine: '#2d291f', metal: '#45433d', stain: '#442b23', lamp: '#d2b784' },
-  { wall: '#17140f', wallDark: '#0c0b09', wallLine: '#29241c', floor: '#17140f', floorLine: '#2d271d', metal: '#403c35', stain: '#4a2d21', lamp: '#c9aa71' },
-  { wall: '#111719', wallDark: '#080c0d', wallLine: '#20292b', floor: '#0f1517', floorLine: '#233033', metal: '#344347', stain: '#2a3230', lamp: '#94a69d' },
-  { wall: '#18130f', wallDark: '#0d0907', wallLine: '#2d2118', floor: '#17110d', floorLine: '#35271c', metal: '#43372f', stain: '#4f251e', lamp: '#d0a865' },
-];
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 const hash = (value: number) => {
@@ -46,13 +36,6 @@ const hash = (value: number) => {
   return x - Math.floor(x);
 };
 const worldToScreen = (worldX: number, playerX: number) => Math.round(worldX - (playerX - PIXEL_VIEW_WIDTH * 0.42));
-const paletteForPosition = (worldX: number) => {
-  if (worldX < 1200) return palettes[0];
-  if (worldX < 2400) return palettes[1];
-  if (worldX < 3600) return palettes[2];
-  if (worldX < 4500) return palettes[3];
-  return palettes[4];
-};
 
 function fillPixelRect(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, color: string) {
   ctx.fillStyle = color;
@@ -281,46 +264,75 @@ function drawEmergencyExit(ctx: CanvasRenderingContext2D, screenX: number) {
   ctx.globalAlpha = 1;
 }
 
+function drawWorldProp(
+  ctx: CanvasRenderingContext2D,
+  prop: WorldPropDefinition,
+  playerX: number,
+  palette: ScenePalette,
+) {
+  const screenX = worldToScreen(prop.worldX, playerX);
+  switch (prop.kind) {
+    case 'window':
+      drawWindow(
+        ctx,
+        screenX - Math.floor(prop.width / 2),
+        prop.y,
+        prop.width,
+        prop.height,
+        palette,
+      );
+      break;
+    case 'bed':
+      drawBed(ctx, screenX, palette);
+      break;
+    case 'wheelchair':
+      drawWheelchair(ctx, screenX);
+      break;
+    case 'door':
+      drawDoor(ctx, screenX, prop.label, palette, prop.sealed);
+      break;
+    case 'locker':
+      drawLocker(ctx, screenX, prop.open, palette);
+      break;
+    case 'gurney':
+      drawGurney(ctx, screenX, palette);
+      break;
+    case 'altar':
+      drawAltar(ctx, screenX, palette);
+      break;
+    case 'exit':
+      drawEmergencyExit(ctx, screenX);
+      break;
+    case 'graffiti':
+      drawGraffiti(ctx, screenX, prop.text, prop.color);
+      break;
+  }
+}
+
 function drawEnvironment(ctx: CanvasRenderingContext2D, playerX: number) {
   const viewX = playerX - PIXEL_VIEW_WIDTH * 0.42;
-  const palette = paletteForPosition(playerX);
+  const palette = getSceneDefinitionAt(playerX).palette;
   drawWallTexture(ctx, viewX, palette);
   drawFloor(ctx, viewX, palette);
   drawCeilingPipes(ctx, viewX, palette);
-  [330, 970, 1640, 2280, 3020, 3890, 4670].forEach((worldX) => {
-    const x = worldToScreen(worldX, playerX);
-    if (x < -40 || x > PIXEL_VIEW_WIDTH + 40) return;
-    fillPixelRect(ctx, x - 12, 37, 24, 4, '#34332e');
-    fillPixelRect(ctx, x - 7, 41, 14, 3, palette.lamp);
-    ctx.globalAlpha = 0.06;
-    const light = ctx.createRadialGradient(x, 48, 2, x, 48, 90);
-    light.addColorStop(0, palette.lamp);
-    light.addColorStop(1, 'rgba(0,0,0,0)');
-    ctx.fillStyle = light;
-    ctx.fillRect(x - 100, 40, 200, 160);
-    ctx.globalAlpha = 1;
+
+  HOSPITAL_SCENE_DEFINITIONS.forEach((scene) => {
+    scene.ambientLights.forEach((ambientLight) => {
+      const x = worldToScreen(ambientLight.worldX, playerX);
+      if (x < -110 || x > PIXEL_VIEW_WIDTH + 110) return;
+      const radius = ambientLight.radius ?? 90;
+      fillPixelRect(ctx, x - 12, 37, 24, 4, '#34332e');
+      fillPixelRect(ctx, x - 7, 41, 14, 3, scene.palette.lamp);
+      ctx.globalAlpha = ambientLight.alpha ?? 0.06;
+      const light = ctx.createRadialGradient(x, 48, 2, x, 48, radius);
+      light.addColorStop(0, scene.palette.lamp);
+      light.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = light;
+      ctx.fillRect(x - radius - 10, 40, radius * 2 + 20, 160);
+      ctx.globalAlpha = 1;
+    });
+    scene.props.forEach((prop) => drawWorldProp(ctx, prop, playerX, scene.palette));
   });
-  drawWindow(ctx, worldToScreen(260, playerX) - 36, 71, 72, 68, palette);
-  drawBed(ctx, worldToScreen(520, playerX), palette);
-  drawWheelchair(ctx, worldToScreen(850, playerX));
-  drawDoor(ctx, worldToScreen(1200, playerX), '第一病棟 A-3', palette);
-  drawLocker(ctx, worldToScreen(1450, playerX), true, palette);
-  drawWindow(ctx, worldToScreen(1820, playerX) - 42, 65, 84, 72, palette);
-  drawGurney(ctx, worldToScreen(2050, playerX), palette);
-  drawDoor(ctx, worldToScreen(2400, playerX), '診察室', palette, true);
-  drawBed(ctx, worldToScreen(2690, playerX), palette);
-  drawWheelchair(ctx, worldToScreen(2895, playerX));
-  drawWindow(ctx, worldToScreen(3100, playerX) - 30, 68, 60, 86, palette);
-  drawDoor(ctx, worldToScreen(3600, playerX), '地下電波室', palette);
-  drawGurney(ctx, worldToScreen(3820, playerX), palette);
-  drawLocker(ctx, worldToScreen(4090, playerX), false, palette);
-  drawDoor(ctx, worldToScreen(4500, playerX), '最奥祭壇', palette);
-  drawAltar(ctx, worldToScreen(4750, playerX), palette);
-  drawEmergencyExit(ctx, worldToScreen(4980, playerX));
-  drawGraffiti(ctx, worldToScreen(710, playerX), 'ハシレ', '#8a2f27');
-  drawGraffiti(ctx, worldToScreen(1610, playerX), '右上ヲ見ロ', '#8a2f27');
-  drawGraffiti(ctx, worldToScreen(2710, playerX), 'お前の名前', '#8a2f27');
-  drawGraffiti(ctx, worldToScreen(3880, playerX), 'NO SIGNAL', '#707875');
 }
 
 function drawItem(ctx: CanvasRenderingContext2D, item: GameItem, playerX: number, now: number) {
@@ -357,17 +369,32 @@ function drawItem(ctx: CanvasRenderingContext2D, item: GameItem, playerX: number
   }
 }
 
-function drawMainAnomaly(ctx: CanvasRenderingContext2D, anomaly: Anomaly, player: PlayerState, now: number) {
-  if (anomaly.captured || anomaly.visibleOnlyInPip) return;
+function drawAnomaly(
+  ctx: CanvasRenderingContext2D,
+  anomaly: Anomaly,
+  player: PlayerState,
+  now: number,
+  channel: SceneRenderChannel,
+) {
+  if (!isAnomalyRenderable(anomaly) || (channel === 'main' && anomaly.visibleOnlyInPip)) return;
   const x = worldToScreen(anomaly.x, player.x);
   if (x < -90 || x > PIXEL_VIEW_WIDTH + 90) return;
   const distance = Math.abs(player.x - anomaly.x);
-  const proximity = clamp((520 - distance) / 520, 0, 1);
+  const detectionRange = channel === 'pip' ? 680 : 520;
+  const proximity = clamp((detectionRange - distance) / detectionRange, 0, 1);
   if (proximity <= 0) return;
-  const visible = player.flashlightOn ? 0.08 + proximity * 0.38 : 0.035 + proximity * 0.12;
+  const visible =
+    channel === 'pip'
+      ? anomaly.visibleOnlyInPip
+        ? 0.22 + proximity * 0.23
+        : 0.12 + proximity * 0.3
+      : player.flashlightOn
+        ? 0.08 + proximity * 0.38
+        : 0.035 + proximity * 0.12;
+  const phaseOpacity = anomaly.directorState?.phase === 'TELEGRAPH' ? 0.36 : 1;
   const y = PIXEL_FLOOR_Y - 64 + (anomaly.yOffset ?? 0);
   ctx.save();
-  ctx.globalAlpha = visible;
+  ctx.globalAlpha = visible * phaseOpacity;
   if (anomaly.type === 'orb') {
     const pulse = 5 + Math.sin(now / 130) * 2;
     const gradient = ctx.createRadialGradient(x, y, 1, x, y, 19 + pulse);
@@ -396,7 +423,12 @@ function drawMainAnomaly(ctx: CanvasRenderingContext2D, anomaly: Anomaly, player
   ctx.restore();
 }
 
-function drawFlashlightMask(ctx: CanvasRenderingContext2D, player: PlayerState, mouse: { x: number; y: number }) {
+function drawFlashlightMask(
+  ctx: CanvasRenderingContext2D,
+  player: PlayerState,
+  mouse: { x: number; y: number },
+  channel: SceneRenderChannel,
+) {
   const playerX = PIXEL_VIEW_WIDTH * 0.42;
   const playerY = player.isCrouching ? PIXEL_FLOOR_Y - 34 : PIXEL_FLOOR_Y - 49;
   const direction = mouse.x >= playerX ? 1 : -1;
@@ -408,7 +440,7 @@ function drawFlashlightMask(ctx: CanvasRenderingContext2D, player: PlayerState, 
   const startX = playerX + direction * 14;
   const startY = playerY - 5;
   ctx.save();
-  ctx.fillStyle = 'rgba(0,0,0,0.83)';
+  ctx.fillStyle = channel === 'pip' ? 'rgba(0,0,0,0.62)' : 'rgba(0,0,0,0.83)';
   ctx.fillRect(0, 0, PIXEL_VIEW_WIDTH, PIXEL_VIEW_HEIGHT);
   if (player.flashlightOn && player.battery > 0) {
     ctx.globalCompositeOperation = 'destination-out';
@@ -432,7 +464,7 @@ function drawFlashlightMask(ctx: CanvasRenderingContext2D, player: PlayerState, 
   ctx.restore();
   const vignette = ctx.createRadialGradient(PIXEL_VIEW_WIDTH / 2, PIXEL_VIEW_HEIGHT / 2, 70, PIXEL_VIEW_WIDTH / 2, PIXEL_VIEW_HEIGHT / 2, 390);
   vignette.addColorStop(0, 'rgba(0,0,0,0)');
-  vignette.addColorStop(1, 'rgba(0,0,0,0.72)');
+  vignette.addColorStop(1, channel === 'pip' ? 'rgba(0,0,0,0.56)' : 'rgba(0,0,0,0.72)');
   ctx.fillStyle = vignette;
   ctx.fillRect(0, 0, PIXEL_VIEW_WIDTH, PIXEL_VIEW_HEIGHT);
 }
@@ -504,21 +536,53 @@ function drawScreenNoise(ctx: CanvasRenderingContext2D, now: number, tension: nu
   for (let y = 0; y < PIXEL_VIEW_HEIGHT; y += 3) ctx.fillRect(0, y, PIXEL_VIEW_WIDTH, 1);
 }
 
-export function renderPixelScene({ ctx, player, anomalies, items, mouse, now, isMoving }: PixelSceneInput) {
+export function renderPixelScene({
+  ctx,
+  player,
+  anomalies,
+  items,
+  mouse,
+  now,
+  isMoving,
+  channel = 'main',
+  recordSnapshot = channel === 'main',
+}: PixelSceneInput) {
+  if (recordSnapshot) {
+    canonicalSceneHistory.record({
+      timestamp: now,
+      player,
+      anomalies,
+      items,
+      mouse,
+      isMoving,
+    });
+  }
+
   ctx.save();
   ctx.imageSmoothingEnabled = false;
   ctx.clearRect(0, 0, PIXEL_VIEW_WIDTH, PIXEL_VIEW_HEIGHT);
   drawEnvironment(ctx, player.x);
   items.forEach((item) => drawItem(ctx, item, player.x, now));
-  anomalies.forEach((anomaly) => drawMainAnomaly(ctx, anomaly, player, now));
-  drawFlashlightMask(ctx, player, mouse);
-  drawPixelCharacter(ctx, player, mouse, now, isMoving);
-  drawScreenNoise(ctx, now, player.tension);
+  anomalies.forEach((anomaly) => drawAnomaly(ctx, anomaly, player, now, channel));
+  drawFlashlightMask(ctx, player, mouse, channel);
+  if (channel === 'main') {
+    drawPixelCharacter(ctx, player, mouse, now, isMoving);
+    drawScreenNoise(ctx, now, player.tension);
+  }
   ctx.restore();
 }
 
 export function renderTitleScene(ctx: CanvasRenderingContext2D, now: number) {
   const player: PlayerState = { x: 1840, speed: 1.8, isRunning: false, isCrouching: false, flashlightOn: true, flashlightAngle: 0, battery: 82, tension: 32, health: 100 };
   const anomalies: Anomaly[] = [{ id: 'title-ghost', x: 2100, width: 55, type: 'ghost', description: 'camera-only apparition', points: 0, captured: false, visibleOnlyInPip: true, yOffset: 0 }];
-  renderPixelScene({ ctx, player, anomalies, items: [], mouse: { x: 535, y: 158 }, now, isMoving: false });
+  renderPixelScene({
+    ctx,
+    player,
+    anomalies,
+    items: [],
+    mouse: { x: 535, y: 158 },
+    now,
+    isMoving: false,
+    recordSnapshot: false,
+  });
 }

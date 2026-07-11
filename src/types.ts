@@ -35,6 +35,89 @@ export interface Anomaly {
   captured: boolean;
   visibleOnlyInPip: boolean;
   yOffset?: number;
+  /** Semantic scene ownership and runtime state for the v3.1 anomaly director. */
+  sceneId?: string;
+  directorState?: AnomalyDirectorState;
+  resolution?: AnomalyResolution | null;
+}
+
+/** Narrative risk bands. The tier may advance, but never falls within a chapter. */
+export type RiskTier = 0 | 1 | 2 | 3;
+
+export type AnomalyResolution = 'RECORDED' | 'IGNORED' | 'MISSED';
+
+export type AnomalyDirectorPhase =
+  | 'DORMANT'
+  | 'TELEGRAPH'
+  | 'ACTIVE'
+  | AnomalyResolution
+  | 'AFTERMATH'
+  | 'COMPLETE';
+
+export type TriggerDefinition =
+  | { type: 'SCENE_ENTER'; sceneId: string }
+  | { type: 'OBJECT_INTERACTION'; objectId: string }
+  | { type: 'RISK_TIER'; tier: RiskTier }
+  | { type: 'SCRIPTED'; cueId: string };
+
+export interface ChannelCue {
+  atMs: number;
+  channel: 'WORLD' | 'PIP' | 'CHAT' | 'AUDIO';
+  cueId: string;
+  visible?: boolean;
+}
+
+export interface ResolutionRule {
+  captureWindowMs?: number;
+  allowIgnore: boolean;
+  missedWhenWindowEnds: boolean;
+}
+
+export interface ChatCue {
+  atMs: number;
+  username: string;
+  text: string;
+  type: Comment['type'];
+}
+
+export interface CameraEffectCue {
+  atMs: number;
+  effect: 'FREEZE' | 'REPEAT' | 'SKIP' | 'EXPOSURE' | 'DISPLACE';
+  durationMs: number;
+  strength?: number;
+}
+
+export interface ReducedEffectDefinition {
+  channelTimeline: ChannelCue[];
+  cameraEffects: CameraEffectCue[];
+}
+
+/**
+ * Data-driven anomaly definition. Scene/object identifiers intentionally replace
+ * raw corridor-coordinate checks in game logic.
+ */
+export interface AnomalyDefinition {
+  id: string;
+  sceneId: string;
+  trigger: TriggerDefinition;
+  channelTimeline: ChannelCue[];
+  activeWindowMs: number;
+  resolution: ResolutionRule;
+  repeatPolicy: 'once' | 'retry' | 'cooldown';
+  cooldownMs?: number;
+  priority: number;
+  chatScript: ChatCue[];
+  cameraEffects: CameraEffectCue[];
+  reducedEffectsVariant: ReducedEffectDefinition;
+}
+
+export interface AnomalyDirectorState {
+  anomalyId: string;
+  phase: AnomalyDirectorPhase;
+  resolution: AnomalyResolution | null;
+  phaseStartedAtMs: number;
+  transitionCount: number;
+  cycle: number;
 }
 
 export interface PlayerState {
