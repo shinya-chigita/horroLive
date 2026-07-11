@@ -4,7 +4,7 @@
  */
 
 import React, { memo, useEffect, useMemo, useRef, useState } from 'react';
-import { Camera, Focus, ScanLine, Signal, SignalHigh, SignalLow, WifiOff } from 'lucide-react';
+import { BatteryMedium, Camera, Crosshair, Radio, Signal, SignalLow, WifiOff } from 'lucide-react';
 import { Anomaly } from '../types';
 
 interface PipCameraV2Props {
@@ -23,101 +23,111 @@ interface FeedSnapshot {
   flashlightOn: boolean;
 }
 
+const WIDTH = 320;
+const HEIGHT = 180;
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+const hash = (value: number) => {
+  const x = Math.sin(value * 12.9898) * 43758.5453;
+  return x - Math.floor(x);
+};
 
-function drawGhost(
-  ctx: CanvasRenderingContext2D,
-  anomaly: Anomaly,
-  distance: number,
-  width: number,
-  height: number,
-  now: number,
-) {
+function drawCorridor(ctx: CanvasRenderingContext2D, flashlightOn: boolean, distortion: number, now: number) {
+  ctx.fillStyle = flashlightOn ? '#0e1311' : '#050706';
+  ctx.fillRect(0, 0, WIDTH, HEIGHT);
+  ctx.strokeStyle = flashlightOn
+    ? `rgba(145,151,139,${0.11 + distortion * 0.035})`
+    : `rgba(98,113,105,${0.07 + distortion * 0.025})`;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.lineTo(120, 65);
+  ctx.moveTo(WIDTH, 0);
+  ctx.lineTo(200, 65);
+  ctx.moveTo(0, HEIGHT);
+  ctx.lineTo(120, 110);
+  ctx.moveTo(WIDTH, HEIGHT);
+  ctx.lineTo(200, 110);
+  ctx.stroke();
+  ctx.fillStyle = '#080b09';
+  ctx.fillRect(120, 65, 80, 48);
+  ctx.strokeStyle = 'rgba(158,161,147,0.08)';
+  ctx.strokeRect(120.5, 65.5, 79, 47);
+  for (let x = 26; x < WIDTH; x += 54) {
+    ctx.fillStyle = '#111512';
+    ctx.fillRect(x, 42, 25, 76);
+    ctx.fillStyle = '#171b17';
+    ctx.fillRect(x + 3, 46, 19, 68);
+    ctx.fillStyle = '#080a08';
+    ctx.fillRect(x + 7, 55, 11, 2);
+    ctx.fillRect(x + 7, 62, 11, 2);
+  }
+  const beam = ctx.createRadialGradient(160, 91, 5, 160, 91, flashlightOn ? 128 : 68);
+  beam.addColorStop(0, flashlightOn ? 'rgba(199,187,153,0.16)' : 'rgba(105,135,124,0.08)');
+  beam.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = beam;
+  ctx.fillRect(0, 0, WIDTH, HEIGHT);
+  const frame = Math.floor(now / 120);
+  for (let i = 0; i < 16; i += 1) {
+    const seed = frame * 31 + i * 19;
+    if (hash(seed) > 0.54) {
+      ctx.fillStyle = `rgba(206,210,196,${0.018 + hash(seed * 1.7) * 0.035})`;
+      ctx.fillRect(Math.floor(hash(seed * 2.1) * WIDTH), Math.floor(hash(seed * 2.9) * HEIGHT), 1, 1);
+    }
+  }
+}
+
+function drawCameraAnomaly(ctx: CanvasRenderingContext2D, anomaly: Anomaly, distance: number, now: number) {
+  if (anomaly.captured) return;
   const proximity = clamp((560 - distance) / 500, 0, 1);
-  if (proximity <= 0 || anomaly.captured) return;
-
-  const jitter = Math.sin(now / 67) * (2 + proximity * 7);
-  const float = Math.cos(now / 180) * 4;
-  const centerX = width * 0.52 + jitter;
-  const centerY = height * 0.53 + float;
-
+  if (proximity <= 0) return;
+  const jitterX = Math.round(Math.sin(now / 79) * (1 + proximity * 3));
+  const jitterY = Math.round(Math.cos(now / 127) * 2);
+  const x = 163 + jitterX;
+  const y = 91 + jitterY;
+  const opacity = 0.08 + proximity * 0.52;
   ctx.save();
-  ctx.globalAlpha = 0.08 + proximity * 0.82;
-  ctx.shadowBlur = 12 + proximity * 22;
-  ctx.shadowColor = anomaly.type === 'orb' ? 'rgba(153,246,228,0.7)' : 'rgba(255,255,255,0.18)';
-
+  ctx.globalAlpha = opacity;
+  ctx.imageSmoothingEnabled = false;
   if (anomaly.type === 'ghost') {
-    const headRadius = 11 + proximity * 7;
-    ctx.fillStyle = 'rgba(226,232,240,0.78)';
-    ctx.beginPath();
-    ctx.ellipse(centerX, centerY - 30, headRadius, headRadius * 1.18, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.fillStyle = 'rgba(0,0,0,0.96)';
-    ctx.beginPath();
-    ctx.ellipse(centerX - 5, centerY - 33, 2.4 + proximity, 4 + proximity, 0, 0, Math.PI * 2);
-    ctx.ellipse(centerX + 5, centerY - 33, 2.4 + proximity, 4 + proximity, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.ellipse(centerX, centerY - 21, 3, 5 + Math.sin(now / 80) * 2, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.fillStyle = 'rgba(2,6,8,0.94)';
-    ctx.beginPath();
-    ctx.moveTo(centerX - 17, centerY - 12);
-    ctx.quadraticCurveTo(centerX - 30, centerY + 45, centerX - 42, centerY + 88);
-    ctx.lineTo(centerX + 40, centerY + 88);
-    ctx.quadraticCurveTo(centerX + 28, centerY + 45, centerX + 16, centerY - 12);
-    ctx.closePath();
-    ctx.fill();
+    ctx.fillStyle = '#b4b6aa';
+    ctx.fillRect(x - 8, y - 42, 16, 17);
+    ctx.fillStyle = '#0b0d0c';
+    ctx.fillRect(x - 5, y - 37, 2, 4);
+    ctx.fillRect(x + 3, y - 37, 2, 4);
+    ctx.fillRect(x - 2, y - 29, 4, 3);
+    ctx.fillStyle = '#080a09';
+    ctx.fillRect(x - 12, y - 25, 24, 52);
+    ctx.fillRect(x - 17, y + 4, 34, 27);
   } else if (anomaly.type === 'shadow') {
-    const gradient = ctx.createRadialGradient(centerX, centerY, 3, centerX, centerY, 45 + proximity * 35);
-    gradient.addColorStop(0, 'rgba(0,0,0,1)');
-    gradient.addColorStop(0.48, 'rgba(0,0,0,0.92)');
-    gradient.addColorStop(1, 'rgba(0,0,0,0)');
-    ctx.fillStyle = gradient;
-    ctx.beginPath();
-    ctx.ellipse(centerX, centerY, 55 + proximity * 38, 82 + proximity * 55, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    if (distance < 260) {
-      ctx.fillStyle = `rgba(220,38,38,${0.2 + proximity * 0.65})`;
-      ctx.beginPath();
-      ctx.arc(centerX - 12, centerY - 16, 2.2, 0, Math.PI * 2);
-      ctx.arc(centerX + 12, centerY - 16, 2.2, 0, Math.PI * 2);
-      ctx.fill();
+    ctx.fillStyle = '#020303';
+    ctx.fillRect(x - 22, y - 45, 44, 76);
+    ctx.fillRect(x - 30, y - 18, 60, 49);
+    if (distance < 230) {
+      ctx.fillStyle = '#6e1717';
+      ctx.fillRect(x - 7, y - 24, 2, 2);
+      ctx.fillRect(x + 5, y - 24, 2, 2);
     }
   } else if (anomaly.type === 'orb') {
-    const pulse = 15 + Math.sin(now / 105) * 4 + proximity * 12;
-    const gradient = ctx.createRadialGradient(centerX, centerY, 1, centerX, centerY, pulse * 2.2);
-    gradient.addColorStop(0, 'rgba(255,255,255,0.95)');
-    gradient.addColorStop(0.22, 'rgba(153,246,228,0.72)');
-    gradient.addColorStop(1, 'rgba(13,148,136,0)');
+    const radius = 7 + Math.round(Math.sin(now / 110) * 2);
+    const gradient = ctx.createRadialGradient(x, y, 1, x, y, radius * 3);
+    gradient.addColorStop(0, 'rgba(228,231,213,0.92)');
+    gradient.addColorStop(0.25, 'rgba(137,156,146,0.48)');
+    gradient.addColorStop(1, 'rgba(0,0,0,0)');
     ctx.fillStyle = gradient;
-    ctx.beginPath();
-    ctx.arc(centerX, centerY, pulse * 2.2, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.fillRect(x - radius * 3, y - radius * 3, radius * 6, radius * 6);
   } else if (anomaly.type === 'writing') {
-    ctx.fillStyle = 'rgba(220,38,38,0.78)';
-    ctx.font = `900 ${14 + proximity * 9}px serif`;
+    ctx.font = 'bold 13px serif';
     ctx.textAlign = 'center';
-    ctx.fillText('み　て　い　る', centerX, centerY);
+    ctx.fillStyle = '#8c3931';
+    ctx.fillText('お前の名前', x, y);
   } else {
-    ctx.fillStyle = 'rgba(69,10,10,0.92)';
-    ctx.beginPath();
-    ctx.arc(centerX, centerY - 18, 12 + proximity * 5, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillRect(centerX - 10, centerY - 7, 20, 40 + proximity * 15);
-    ctx.strokeStyle = 'rgba(15,15,15,0.95)';
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    ctx.moveTo(centerX - 7, centerY + 7);
-    ctx.lineTo(centerX - 18, centerY + 45);
-    ctx.moveTo(centerX + 7, centerY + 7);
-    ctx.lineTo(centerX + 18, centerY + 45);
-    ctx.stroke();
+    ctx.fillStyle = '#a79b87';
+    ctx.fillRect(x - 7, y - 28, 14, 13);
+    ctx.fillStyle = '#111312';
+    ctx.fillRect(x - 9, y - 32, 18, 6);
+    ctx.fillStyle = '#302b27';
+    ctx.fillRect(x - 7, y - 15, 14, 30);
   }
-
   ctx.restore();
 }
 
@@ -130,251 +140,155 @@ function PipCameraV2({
   canCapture,
 }: PipCameraV2Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const feedRef = useRef<FeedSnapshot>({
-    anomaly: currentAnomaly,
-    distance: anomalyDistance,
-    tension,
-    flashlightOn,
-  });
+  const feedRef = useRef<FeedSnapshot>({ anomaly: currentAnomaly, distance: anomalyDistance, tension, flashlightOn });
   const captureTimerRef = useRef<number | null>(null);
   const [captureFeedback, setCaptureFeedback] = useState<string | null>(null);
-
-  feedRef.current = {
-    anomaly: currentAnomaly,
-    distance: anomalyDistance,
-    tension,
-    flashlightOn,
-  };
+  feedRef.current = { anomaly: currentAnomaly, distance: anomalyDistance, tension, flashlightOn };
 
   const signal = useMemo(() => {
-    if (tension > 88) return { label: 'LOST', icon: WifiOff, className: 'text-red-400 bg-red-950/65 border-red-500/25' };
-    if (tension > 66) return { label: 'CRITICAL', icon: SignalLow, className: 'text-red-300 bg-red-950/45 border-red-500/20' };
-    if (tension > 34) return { label: 'WEAK', icon: Signal, className: 'text-amber-300 bg-amber-950/35 border-amber-500/20' };
-    return { label: 'STABLE', icon: SignalHigh, className: 'text-emerald-300 bg-emerald-950/30 border-emerald-500/20' };
+    if (tension > 88) return { label: 'LOST', icon: WifiOff, className: 'text-red-700 border-red-900/55' };
+    if (tension > 66) return { label: 'CRITICAL', icon: SignalLow, className: 'text-red-700 border-red-900/45' };
+    if (tension > 34) return { label: 'WEAK', icon: SignalLow, className: 'text-amber-800 border-amber-900/35' };
+    return { label: 'STABLE', icon: Signal, className: 'text-zinc-500 border-white/10' };
   }, [tension]);
 
-  const faceTracked = Boolean(
-    currentAnomaly && !currentAnomaly.captured && anomalyDistance < 380 && flashlightOn,
-  );
+  const tracked = Boolean(currentAnomaly && !currentAnomaly.captured && anomalyDistance < 390 && flashlightOn);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d', { alpha: false });
     if (!ctx) return;
-
     const noiseCanvas = document.createElement('canvas');
     noiseCanvas.width = 80;
-    noiseCanvas.height = 60;
+    noiseCanvas.height = 45;
     const noiseCtx = noiseCanvas.getContext('2d');
-    const noiseImage = noiseCtx?.createImageData(noiseCanvas.width, noiseCanvas.height) ?? null;
-
+    const noiseImage = noiseCtx?.createImageData(80, 45) ?? null;
     let animationId = 0;
     let previousFrame = 0;
     let lastNoiseAt = 0;
+    let frozenUntil = 0;
 
     const render = (now: number) => {
       animationId = window.requestAnimationFrame(render);
-      if (now - previousFrame < 32) return;
-      previousFrame = now;
-
-      const width = canvas.width;
-      const height = canvas.height;
       const snapshot = feedRef.current;
       const distortion = clamp(snapshot.tension / 100, 0, 1);
-
-      const wallGradient = ctx.createLinearGradient(0, 0, 0, height);
-      wallGradient.addColorStop(0, snapshot.flashlightOn ? '#10201b' : '#020303');
-      wallGradient.addColorStop(0.55, snapshot.flashlightOn ? '#09110f' : '#010101');
-      wallGradient.addColorStop(1, '#030404');
-      ctx.fillStyle = wallGradient;
-      ctx.fillRect(0, 0, width, height);
-
-      if (snapshot.flashlightOn) {
-        ctx.save();
-        ctx.strokeStyle = `rgba(110,231,183,${0.08 + distortion * 0.03})`;
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(0, 0);
-        ctx.lineTo(width * 0.38, height * 0.36);
-        ctx.moveTo(width, 0);
-        ctx.lineTo(width * 0.62, height * 0.36);
-        ctx.moveTo(0, height);
-        ctx.lineTo(width * 0.38, height * 0.64);
-        ctx.moveTo(width, height);
-        ctx.lineTo(width * 0.62, height * 0.64);
-        ctx.rect(width * 0.38, height * 0.36, width * 0.24, height * 0.28);
-        ctx.stroke();
-
-        for (let x = -20; x < width + 40; x += 38) {
-          const sway = Math.sin(now / 800 + x) * 1.5;
-          ctx.beginPath();
-          ctx.moveTo(x + sway, height * 0.66);
-          ctx.lineTo(width / 2 + (x - width / 2) * 0.23, height * 0.52);
-          ctx.stroke();
-        }
-
-        const beam = ctx.createRadialGradient(width / 2, height / 2, 8, width / 2, height / 2, width * 0.48);
-        beam.addColorStop(0, 'rgba(187,247,208,0.12)');
-        beam.addColorStop(0.58, 'rgba(16,185,129,0.035)');
-        beam.addColorStop(1, 'rgba(0,0,0,0)');
-        ctx.fillStyle = beam;
-        ctx.fillRect(0, 0, width, height);
-        ctx.restore();
+      const frameInterval = 48 + distortion * 28;
+      if (now - previousFrame < frameInterval) return;
+      previousFrame = now;
+      if (now < frozenUntil) return;
+      if (snapshot.tension > 55 && Math.random() < 0.025 + distortion * 0.055) {
+        frozenUntil = now + 70 + Math.random() * (120 + distortion * 260);
+        return;
       }
-
-      if (snapshot.anomaly && snapshot.distance < 560) {
-        drawGhost(ctx, snapshot.anomaly, snapshot.distance, width, height, now);
-      }
-
-      if (noiseCtx && noiseImage && now - lastNoiseAt > Math.max(55, 95 - distortion * 45)) {
+      drawCorridor(ctx, snapshot.flashlightOn, distortion, now);
+      if (snapshot.anomaly && snapshot.distance < 560) drawCameraAnomaly(ctx, snapshot.anomaly, snapshot.distance, now);
+      if (noiseCtx && noiseImage && now - lastNoiseAt > 70 - distortion * 22) {
         lastNoiseAt = now;
         const pixels = noiseImage.data;
-        const intensity = snapshot.tension > 82 ? 0.44 : snapshot.tension > 58 ? 0.24 : snapshot.tension > 28 ? 0.12 : 0.055;
+        const intensity = 0.05 + distortion * 0.33;
         for (let index = 0; index < pixels.length; index += 4) {
           const active = Math.random() < intensity;
-          const value = active ? Math.floor(Math.random() * 210 + 25) : 0;
+          const value = active ? Math.floor(65 + Math.random() * 150) : 0;
           pixels[index] = value;
           pixels[index + 1] = value;
           pixels[index + 2] = value;
-          pixels[index + 3] = active ? Math.floor(40 + distortion * 100) : 0;
+          pixels[index + 3] = active ? Math.floor(22 + distortion * 88) : 0;
         }
         noiseCtx.putImageData(noiseImage, 0, 0);
       }
-
-      ctx.save();
-      ctx.globalAlpha = 0.16 + distortion * 0.28;
-      ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(noiseCanvas, 0, 0, width, height);
-      ctx.restore();
-
-      ctx.fillStyle = `rgba(0,0,0,${0.12 + distortion * 0.16})`;
-      for (let y = 0; y < height; y += 4) {
-        ctx.fillRect(0, y, width, 1.5);
+      if (noiseImage) {
+        ctx.save();
+        ctx.globalAlpha = 0.16 + distortion * 0.32;
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(noiseCanvas, 0, 0, WIDTH, HEIGHT);
+        ctx.restore();
       }
-
-      if (snapshot.tension > 48 && Math.random() < 0.07 + distortion * 0.1) {
-        const glitchY = Math.random() * height;
-        const glitchHeight = 2 + Math.random() * (4 + distortion * 16);
-        ctx.fillStyle = `rgba(236,253,245,${0.08 + distortion * 0.25})`;
-        ctx.fillRect(0, glitchY, width, glitchHeight);
+      for (let y = 0; y < HEIGHT; y += 3) {
+        ctx.fillStyle = `rgba(0,0,0,${0.2 + distortion * 0.08})`;
+        ctx.fillRect(0, y, WIDTH, 1);
       }
-
-      if (!snapshot.flashlightOn) {
-        ctx.fillStyle = 'rgba(0,0,0,0.75)';
-        ctx.fillRect(0, 0, width, height);
+      if (snapshot.tension > 45 && Math.random() < 0.08 + distortion * 0.08) {
+        const glitchY = Math.floor(Math.random() * HEIGHT);
+        const glitchH = 1 + Math.floor(Math.random() * (3 + distortion * 10));
+        ctx.fillStyle = `rgba(187,194,181,${0.06 + distortion * 0.18})`;
+        ctx.fillRect(0, glitchY, WIDTH, glitchH);
+        if (distortion > 0.62) {
+          ctx.fillStyle = `rgba(92,20,24,${0.06 + distortion * 0.12})`;
+          ctx.fillRect(3, glitchY + 1, WIDTH - 3, 1);
+        }
       }
-
-      const vignette = ctx.createRadialGradient(width / 2, height / 2, width * 0.12, width / 2, height / 2, width * 0.67);
+      const vignette = ctx.createRadialGradient(WIDTH / 2, HEIGHT / 2, 34, WIDTH / 2, HEIGHT / 2, 190);
       vignette.addColorStop(0, 'rgba(0,0,0,0)');
-      vignette.addColorStop(1, 'rgba(0,0,0,0.82)');
+      vignette.addColorStop(1, 'rgba(0,0,0,0.84)');
       ctx.fillStyle = vignette;
-      ctx.fillRect(0, 0, width, height);
+      ctx.fillRect(0, 0, WIDTH, HEIGHT);
     };
 
     animationId = window.requestAnimationFrame(render);
     return () => window.cancelAnimationFrame(animationId);
   }, []);
 
-  useEffect(
-    () => () => {
-      if (captureTimerRef.current !== null) window.clearTimeout(captureTimerRef.current);
-    },
-    [],
-  );
+  useEffect(() => () => {
+    if (captureTimerRef.current !== null) window.clearTimeout(captureTimerRef.current);
+  }, []);
 
   const handleCapture = () => {
     if (!canCapture) return;
     onCaptureAnomaly();
-    setCaptureFeedback('ANOMALY RECORDED');
-
+    setCaptureFeedback('RECORDED');
     if (captureTimerRef.current !== null) window.clearTimeout(captureTimerRef.current);
     captureTimerRef.current = window.setTimeout(() => {
       setCaptureFeedback(null);
       captureTimerRef.current = null;
-    }, 1350);
+    }, 1100);
   };
 
   const SignalIcon = signal.icon;
-  const confidence = faceTracked ? Math.round(clamp(100 - anomalyDistance / 7, 64, 99)) : 0;
+  const confidence = tracked ? Math.round(clamp(100 - anomalyDistance / 7.5, 62, 98)) : 0;
 
   return (
-    <section className="screen-frame relative aspect-[4/3] min-h-[250px] overflow-hidden rounded-xl border border-white/10 bg-black shadow-[0_24px_70px_rgba(0,0,0,0.75)]">
-      <canvas ref={canvasRef} width={320} height={240} className="h-full w-full object-cover" />
-      <div className="pointer-events-none absolute inset-0 crt-scanlines opacity-20" />
-      <div className="pointer-events-none absolute inset-0 border-[10px] border-black/12" />
-
-      <div className="pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between p-3.5">
-        <div className="flex items-center gap-2 rounded-md border border-white/8 bg-black/65 px-2.5 py-1.5 font-mono text-[8px] font-black uppercase tracking-[0.16em] text-red-400 backdrop-blur-md">
-          <span className="relative flex h-1.5 w-1.5">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-500 opacity-70" />
-            <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-red-600" />
-          </span>
-          cam-01 / rec
+    <section className="screen-frame relative aspect-video min-h-[220px] overflow-hidden border border-white/10 bg-black">
+      <canvas ref={canvasRef} width={WIDTH} height={HEIGHT} className="pixel-canvas h-full w-full object-cover" />
+      <div className="pointer-events-none absolute inset-0 crt-scanlines opacity-25" />
+      <div className="pointer-events-none absolute inset-0 pixel-screen-vignette" />
+      <div className="pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between p-2.5">
+        <div className="flex items-center gap-1.5 border border-white/10 bg-black/75 px-2 py-1 font-mono text-[7px] uppercase tracking-[0.14em] text-zinc-400">
+          <span className="h-1.5 w-1.5 bg-red-700" /> rec / cam-01
         </div>
-
-        <div className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 font-mono text-[8px] font-black uppercase tracking-[0.12em] backdrop-blur-md ${signal.className}`}>
-          <SignalIcon className="h-3 w-3" />
-          {signal.label}
+        <div className={`flex items-center gap-1.5 border bg-black/75 px-2 py-1 font-mono text-[7px] uppercase tracking-[0.12em] ${signal.className}`}>
+          <SignalIcon className="h-2.5 w-2.5" /> {signal.label}
         </div>
       </div>
-
       <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-        <div className={`relative h-11 w-11 transition-all duration-300 ${faceTracked ? 'scale-125 text-emerald-400 opacity-100' : 'text-white opacity-25'}`}>
-          <Focus className="h-full w-full" strokeWidth={1.25} />
-        </div>
+        <Crosshair className={`h-7 w-7 transition ${tracked ? 'text-zinc-200 opacity-80' : 'text-zinc-500 opacity-20'}`} strokeWidth={1} />
       </div>
-
-      {faceTracked && (
-        <div className="pointer-events-none absolute left-1/2 top-1/2 h-24 w-20 -translate-x-1/2 -translate-y-[58%] border border-emerald-400/80 shadow-[0_0_18px_rgba(52,211,153,0.2)]">
-          <span className="absolute -left-px -top-px h-3 w-3 border-l-2 border-t-2 border-emerald-300" />
-          <span className="absolute -right-px -top-px h-3 w-3 border-r-2 border-t-2 border-emerald-300" />
-          <span className="absolute -bottom-px -left-px h-3 w-3 border-b-2 border-l-2 border-emerald-300" />
-          <span className="absolute -bottom-px -right-px h-3 w-3 border-b-2 border-r-2 border-emerald-300" />
-          <span className="absolute -top-5 left-0 whitespace-nowrap font-mono text-[7px] font-bold text-emerald-300">
-            SUBJECT? {confidence}%
-          </span>
+      {tracked && (
+        <div className="pointer-events-none absolute left-1/2 top-1/2 h-20 w-16 -translate-x-1/2 -translate-y-[56%] border border-zinc-300/55">
+          <span className="absolute -top-4 left-0 whitespace-nowrap font-mono text-[6px] uppercase tracking-[0.12em] text-zinc-400">subject? {confidence}%</span>
+          <span className="absolute -left-px -top-px h-2 w-2 border-l-2 border-t-2 border-zinc-200" />
+          <span className="absolute -right-px -top-px h-2 w-2 border-r-2 border-t-2 border-zinc-200" />
+          <span className="absolute -bottom-px -left-px h-2 w-2 border-b-2 border-l-2 border-zinc-200" />
+          <span className="absolute -bottom-px -right-px h-2 w-2 border-b-2 border-r-2 border-zinc-200" />
         </div>
       )}
-
-      {!flashlightOn && (
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/48">
-          <div className="rounded-lg border border-red-500/15 bg-black/70 px-4 py-3 text-center backdrop-blur-sm">
-            <WifiOff className="mx-auto h-4 w-4 text-red-500" />
-            <p className="mt-2 font-mono text-[8px] font-black uppercase tracking-[0.18em] text-red-400">
-              optical feed unavailable
-            </p>
-          </div>
-        </div>
-      )}
-
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between p-3.5">
-        <div className="space-y-1 font-mono text-[7px] uppercase tracking-[0.12em] text-emerald-300/75">
-          <p className="flex items-center gap-1.5"><ScanLine className="h-3 w-3" /> IR / ISO 6400</p>
-          <p>DIST {anomalyDistance > 9000 ? '---' : `${Math.round(anomalyDistance)}u`}</p>
-        </div>
-
-        <button
-          type="button"
-          onClick={handleCapture}
-          disabled={!canCapture}
-          className={`pointer-events-auto inline-flex items-center gap-2 rounded-lg border px-3 py-2 font-mono text-[8px] font-black uppercase tracking-[0.14em] transition active:scale-95 ${
-            canCapture
-              ? 'border-red-500/40 bg-red-600 text-white shadow-[0_8px_30px_rgba(220,38,38,0.32)] hover:bg-red-500'
-              : 'cursor-not-allowed border-white/8 bg-black/55 text-zinc-600'
-          }`}
-          aria-label="怪異を撮影"
-        >
-          <Camera className="h-3.5 w-3.5" />
-          {canCapture ? 'capture' : 'out of range'}
-        </button>
+      <div className="pointer-events-none absolute bottom-2.5 left-2.5 space-y-1 font-mono text-[6px] uppercase tracking-[0.12em] text-zinc-600">
+        <p className="flex items-center gap-1"><Radio className="h-2.5 w-2.5" /> {flashlightOn ? 'LOW LIGHT' : 'IR GAIN +18'}</p>
+        <p className="flex items-center gap-1"><BatteryMedium className="h-2.5 w-2.5" /> CAM 88%</p>
+        <p>DIST {anomalyDistance > 9000 ? '---' : `${Math.round(anomalyDistance)}u`}</p>
       </div>
-
+      <button
+        type="button"
+        onClick={handleCapture}
+        disabled={!canCapture}
+        className={`absolute bottom-2.5 right-2.5 z-20 inline-flex items-center gap-1.5 border px-2.5 py-2 font-mono text-[7px] font-semibold uppercase tracking-[0.12em] transition active:translate-y-px ${canCapture ? 'border-red-800/70 bg-red-950/45 text-red-300 hover:bg-red-900/55' : 'cursor-not-allowed border-white/8 bg-black/70 text-zinc-700'}`}
+        aria-label="怪異を撮影"
+      >
+        <Camera className="h-3 w-3" /> {canCapture ? 'capture' : 'out of range'}
+      </button>
       {captureFeedback && (
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-white/80 mix-blend-screen">
-          <div className="rounded-md bg-black px-4 py-2 font-mono text-[9px] font-black uppercase tracking-[0.2em] text-white">
-            {captureFeedback}
-          </div>
+        <div className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center bg-white/75 mix-blend-screen">
+          <span className="border border-black bg-black px-4 py-2 font-mono text-[8px] font-semibold tracking-[0.2em] text-white">{captureFeedback}</span>
         </div>
       )}
     </section>
