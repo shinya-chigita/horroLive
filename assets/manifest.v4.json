@@ -122,17 +122,66 @@
     {
       "id": "char_player_atlas",
       "kind": "sprite-atlas",
-      "status": "planned",
-      "sourcePath": "source/characters/char_player.aseprite",
-      "runtimePath": "runtime/atlases/char_player.png",
-      "metadataPath": "runtime/atlases/char_player.json",
+      "status": "runtime-ready",
+      "sourcePath": "concepts/character-direction-v4.png",
+      "chromaSourcePath": "assets/runtime-sources/player-atlas-v1-key.png",
+      "runtimePath": "public/assets/runtime/player-atlas-v1.png",
+      "size": {
+        "width": 1672,
+        "height": 941
+      },
+      "bytes": 730383,
+      "sha256": "720E9EB1E8E00FABFC3B7623AEC55F942258F54E14E8334A875D4709B3E1A97F",
+      "colorMode": "RGBA",
+      "transparent": true,
+      "grid": {
+        "columns": 4,
+        "rows": 2,
+        "cellSizing": "proportional"
+      },
       "cell": {
         "width": 64,
-        "height": 80
+        "height": 80,
+        "space": "runtime-output"
       },
       "pivot": {
         "x": 32,
-        "y": 76
+        "y": 76,
+        "space": "runtime-output"
+      },
+      "frames": {
+        "idle_right": {
+          "column": 0,
+          "row": 0
+        },
+        "walk_contact_a": {
+          "column": 1,
+          "row": 0
+        },
+        "walk_passing": {
+          "column": 2,
+          "row": 0
+        },
+        "walk_contact_b": {
+          "column": 3,
+          "row": 0
+        },
+        "crouch": {
+          "column": 0,
+          "row": 1
+        },
+        "flashlight_aim": {
+          "column": 1,
+          "row": 1
+        },
+        "startle": {
+          "column": 2,
+          "row": 1
+        },
+        "fatigue": {
+          "column": 3,
+          "row": 1
+        }
       },
       "fps": {
         "idle": 4,
@@ -150,10 +199,52 @@
     {
       "id": "anom_observer_atlas",
       "kind": "sprite-atlas",
-      "status": "planned",
-      "sourcePath": "source/anomalies/anom_observer.aseprite",
-      "runtimePath": "runtime/atlases/anom_observer.png",
-      "metadataPath": "runtime/atlases/anom_observer.json",
+      "status": "runtime-ready",
+      "sourcePath": "concepts/observer-direction-v4-v2.png",
+      "chromaSourcePath": "assets/runtime-sources/observer-atlas-v1-key.png",
+      "runtimePath": "public/assets/runtime/observer-atlas-v1.png",
+      "size": {
+        "width": 1672,
+        "height": 941
+      },
+      "bytes": 718507,
+      "sha256": "9FA569397852D5C61074498764C1055E9157C54A1FE5B5204724050337E26D36",
+      "colorMode": "RGBA",
+      "transparent": true,
+      "grid": {
+        "columns": 3,
+        "rows": 1,
+        "cellSizing": "proportional"
+      },
+      "pivotDefinitions": {
+        "floor": {
+          "x": 0.5,
+          "y": 0.94,
+          "space": "normalized-cell"
+        },
+        "fragment": {
+          "x": 0.5,
+          "y": 0.5,
+          "space": "normalized-cell"
+        }
+      },
+      "frames": {
+        "far_silhouette": {
+          "column": 0,
+          "row": 0,
+          "pivot": "floor"
+        },
+        "mid_occluded_fragment": {
+          "column": 1,
+          "row": 0,
+          "pivot": "fragment"
+        },
+        "near_head_shoulders_edge": {
+          "column": 2,
+          "row": 0,
+          "pivot": "fragment"
+        }
+      },
       "channels": [
         "PIP",
         "WORLD_BLEED"
@@ -191,10 +282,117 @@
     {
       "id": "prop_hospital_atlas",
       "kind": "prop-atlas",
-      "status": "planned",
-      "sourcePath": "source/props/prop_hospital.aseprite",
-      "runtimePath": "runtime/atlases/prop_hospital.png",
-      "metadataPath": "runtime/atlases/prop_hospital.json"
+      "status": "runtime-ready",
+      "sourcePath": "concepts/hospital-props-direction-v4.png",
+      "chromaSourcePath": "assets/runtime-sources/hospital-props-atlas-v1-key.png",
+      "runtimePath": "public/assets/runtime/hospital-props-atlas-v1.png",
+      "size": {
+        "width": 1448,
+        "height": 1086
+      },
+      "bytes": 943327,
+      "sha256": "B1FD73E7438A34EF7A90EF1F53DE78281A84C755CE581F504BF8484AC9566695",
+      "colorMode": "RGBA",
+      "transparent": true,
+      "grid": {
+        "columns": 4,
+        "rows": 4,
+        "cellSizing": "proportional"
+      },
+      "pivotDefinitions": {
+        "ground": {
+          "x": 0.5,
+          "y": 0.92,
+          "space": "normalized-cell"
+        },
+        "center": {
+          "x": 0.5,
+          "y": 0.5,
+          "space": "normalized-cell"
+        }
+      },
+      "frames": {
+        "prop_bed_rusted": {
+          "column": 0,
+          "row": 0,
+          "pivot": "ground"
+        },
+        "prop_gurney": {
+          "column": 1,
+          "row": 0,
+          "pivot": "ground"
+        },
+        "prop_wheelchair": {
+          "column": 2,
+          "row": 0,
+          "pivot": "ground"
+        },
+        "prop_iv_stand": {
+          "column": 3,
+          "row": 0,
+          "pivot": "ground"
+        },
+        "prop_medicine_cart": {
+          "column": 0,
+          "row": 1,
+          "pivot": "ground"
+        },
+        "prop_locker_closed": {
+          "column": 1,
+          "row": 1,
+          "pivot": "ground"
+        },
+        "prop_locker_open": {
+          "column": 2,
+          "row": 1,
+          "pivot": "ground"
+        },
+        "prop_crt_monitor": {
+          "column": 3,
+          "row": 1,
+          "pivot": "ground"
+        },
+        "prop_room_door": {
+          "column": 0,
+          "row": 2,
+          "pivot": "ground"
+        },
+        "prop_curtain": {
+          "column": 1,
+          "row": 2,
+          "pivot": "ground"
+        },
+        "prop_wet_reflection": {
+          "column": 2,
+          "row": 2,
+          "pivot": "center"
+        },
+        "gear_backpack": {
+          "column": 3,
+          "row": 2,
+          "pivot": "ground"
+        },
+        "item_keycard": {
+          "column": 0,
+          "row": 3,
+          "pivot": "center"
+        },
+        "item_diary": {
+          "column": 1,
+          "row": 3,
+          "pivot": "center"
+        },
+        "item_old_photo": {
+          "column": 2,
+          "row": 3,
+          "pivot": "center"
+        },
+        "item_battery": {
+          "column": 3,
+          "row": 3,
+          "pivot": "center"
+        }
+      }
     },
     {
       "id": "ui_broadcast_icons",

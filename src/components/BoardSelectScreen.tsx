@@ -23,6 +23,7 @@ import {
   isRunModeUnlocked,
   type ProgressionState,
 } from '../game/progression';
+import { RUNTIME_ATLASES } from '../game/runtimeVisualAssets';
 
 export interface BoardSelectScreenProps {
   selectedBoardId: BoardId;
@@ -35,6 +36,60 @@ export interface BoardSelectScreenProps {
 }
 
 const RUN_MODES: readonly RunMode[] = ['STANDARD', 'DEEP_BROADCAST'];
+
+const HOSPITAL_PROPS_ATLAS = RUNTIME_ATLASES['hospital-props'];
+const HOSPITAL_PROPS_CELL_WIDTH =
+  HOSPITAL_PROPS_ATLAS.width / HOSPITAL_PROPS_ATLAS.columns;
+const HOSPITAL_PROPS_CELL_HEIGHT =
+  HOSPITAL_PROPS_ATLAS.height / HOSPITAL_PROPS_ATLAS.rows;
+const OBSERVER_ATLAS = RUNTIME_ATLASES.observer;
+const OBSERVER_CELL_WIDTH = OBSERVER_ATLAS.width / OBSERVER_ATLAS.columns;
+
+interface AtlasSpriteProps {
+  href: string;
+  atlasWidth: number;
+  atlasHeight: number;
+  viewBox: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  opacity?: number;
+}
+
+function AtlasSprite({
+  href,
+  atlasWidth,
+  atlasHeight,
+  viewBox,
+  x,
+  y,
+  width,
+  height,
+  opacity = 1,
+}: AtlasSpriteProps) {
+  return (
+    <svg
+      x={x}
+      y={y}
+      width={width}
+      height={height}
+      viewBox={viewBox}
+      preserveAspectRatio="none"
+      overflow="hidden"
+      opacity={opacity}
+      aria-hidden="true"
+    >
+      <image
+        href={href}
+        width={atlasWidth}
+        height={atlasHeight}
+        preserveAspectRatio="none"
+        style={{ imageRendering: 'pixelated' }}
+      />
+    </svg>
+  );
+}
 
 function BoardSignal({ boardId }: { boardId: BoardId }) {
   if (boardId === 'school') {
@@ -83,6 +138,47 @@ function BoardSignal({ boardId }: { boardId: BoardId }) {
       <path d="M170 56H250M170 72H250M170 88H250" stroke="#272821" />
       <path d="M76 118h43m-37-15h30m193 15h43m-36-15h30" stroke="#4a473d" strokeWidth="3" />
       <path d="M328 55c-6 13-7 27-5 43m8-43c5 9 7 21 5 35" stroke="#171817" strokeWidth="6" opacity=".88" />
+      <AtlasSprite
+        href={HOSPITAL_PROPS_ATLAS.url}
+        atlasWidth={HOSPITAL_PROPS_ATLAS.width}
+        atlasHeight={HOSPITAL_PROPS_ATLAS.height}
+        viewBox={`0 0 ${HOSPITAL_PROPS_CELL_WIDTH} ${HOSPITAL_PROPS_CELL_HEIGHT}`}
+        x={20}
+        y={68}
+        width={166}
+        height={96}
+      />
+      <AtlasSprite
+        href={HOSPITAL_PROPS_ATLAS.url}
+        atlasWidth={HOSPITAL_PROPS_ATLAS.width}
+        atlasHeight={HOSPITAL_PROPS_ATLAS.height}
+        viewBox={`0 ${HOSPITAL_PROPS_CELL_HEIGHT * 2} ${HOSPITAL_PROPS_CELL_WIDTH} ${HOSPITAL_PROPS_CELL_HEIGHT}`}
+        x={174}
+        y={35}
+        width={72}
+        height={128}
+      />
+      <AtlasSprite
+        href={HOSPITAL_PROPS_ATLAS.url}
+        atlasWidth={HOSPITAL_PROPS_ATLAS.width}
+        atlasHeight={HOSPITAL_PROPS_ATLAS.height}
+        viewBox={`${HOSPITAL_PROPS_CELL_WIDTH * 2} 0 ${HOSPITAL_PROPS_CELL_WIDTH} ${HOSPITAL_PROPS_CELL_HEIGHT}`}
+        x={272}
+        y={74}
+        width={92}
+        height={86}
+      />
+      <AtlasSprite
+        href={OBSERVER_ATLAS.url}
+        atlasWidth={OBSERVER_ATLAS.width}
+        atlasHeight={OBSERVER_ATLAS.height}
+        viewBox={`0 0 ${OBSERVER_CELL_WIDTH} ${OBSERVER_ATLAS.height}`}
+        x={346}
+        y={17}
+        width={74}
+        height={150}
+        opacity={0.24}
+      />
       <rect x="0" y="0" width="420" height="176" fill="url(#hospitalFade)" />
       <defs>
         <linearGradient id="hospitalFade" x1="0" x2="1">

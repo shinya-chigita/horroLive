@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from 'react';
+import React, { useState } from 'react';
 import {
   ArrowLeftRight,
   Camera,
@@ -16,10 +16,17 @@ import {
 } from 'lucide-react';
 import { AudioSynth } from '../utils/audio';
 import { createPlayerSpriteFrame } from '../game/playerSprite';
+import { RUNTIME_ATLASES } from '../game/runtimeVisualAssets';
 
 interface TitleScreenV2Props {
   onStartGame: () => void;
 }
+
+const PLAYER_ATLAS = RUNTIME_ATLASES.player;
+const PLAYER_CELL_WIDTH = PLAYER_ATLAS.width / PLAYER_ATLAS.columns;
+const PLAYER_CELL_HEIGHT = PLAYER_ATLAS.height / PLAYER_ATLAS.rows;
+const OBSERVER_ATLAS = RUNTIME_ATLASES.observer;
+const OBSERVER_CELL_WIDTH = OBSERVER_ATLAS.width / OBSERVER_ATLAS.columns;
 
 const GAMEPLAY_PILLARS = [
   {
@@ -65,6 +72,64 @@ function ReferenceCharacter() {
         />
       ))}
     </g>
+  );
+}
+
+function RuntimeReferenceCharacter() {
+  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+
+  return (
+    <>
+      {status !== 'ready' && <ReferenceCharacter />}
+      {status !== 'error' && (
+        <svg
+          x="220"
+          y="190"
+          width="150"
+          height="200"
+          viewBox={`${PLAYER_CELL_WIDTH} ${PLAYER_CELL_HEIGHT} ${PLAYER_CELL_WIDTH} ${PLAYER_CELL_HEIGHT}`}
+          overflow="hidden"
+          aria-hidden="true"
+        >
+          <image
+            href={PLAYER_ATLAS.url}
+            width={PLAYER_ATLAS.width}
+            height={PLAYER_ATLAS.height}
+            preserveAspectRatio="none"
+            onLoad={() => setStatus('ready')}
+            onError={() => setStatus('error')}
+            style={{
+              imageRendering: 'pixelated',
+              opacity: status === 'ready' ? 1 : 0,
+              transition: 'opacity 180ms linear',
+            }}
+          />
+        </svg>
+      )}
+    </>
+  );
+}
+
+function RuntimeObserver() {
+  return (
+    <svg
+      x="584"
+      y="102"
+      width="86"
+      height="188"
+      viewBox={`0 0 ${OBSERVER_CELL_WIDTH} ${OBSERVER_ATLAS.height}`}
+      overflow="hidden"
+      opacity="0.22"
+      aria-hidden="true"
+    >
+      <image
+        href={OBSERVER_ATLAS.url}
+        width={OBSERVER_ATLAS.width}
+        height={OBSERVER_ATLAS.height}
+        preserveAspectRatio="none"
+        style={{ imageRendering: 'pixelated' }}
+      />
+    </svg>
   );
 }
 
@@ -134,7 +199,9 @@ function ReferencePreview() {
           <rect x="596" y="198" width="23" height="10" fill="#090a09" />
         </g>
 
-        <ReferenceCharacter />
+        <RuntimeObserver />
+
+        <RuntimeReferenceCharacter />
 
         <g opacity="0.36">
           <rect x="91" y="80" width="1" height="192" fill="#6b6456" />

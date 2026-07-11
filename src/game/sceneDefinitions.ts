@@ -18,6 +18,11 @@ export type WorldPropDefinition =
   | { id: string; kind: 'door'; worldX: number; label: string; sealed?: boolean }
   | { id: string; kind: 'locker'; worldX: number; open: boolean }
   | { id: string; kind: 'gurney'; worldX: number }
+  | { id: string; kind: 'iv-stand'; worldX: number }
+  | { id: string; kind: 'medicine-cart'; worldX: number }
+  | { id: string; kind: 'crt'; worldX: number }
+  | { id: string; kind: 'curtain'; worldX: number }
+  | { id: string; kind: 'wet-reflection'; worldX: number }
   | { id: string; kind: 'altar'; worldX: number }
   | { id: string; kind: 'exit'; worldX: number }
   | { id: string; kind: 'shoe-lockers'; worldX: number; columns?: number }
@@ -160,8 +165,10 @@ export const HOSPITAL_SCENE_DEFINITIONS: readonly SceneDefinition[] = [
     props: [
       { id: 'entry-window', kind: 'window', worldX: 260, y: 71, width: 72, height: 68 },
       { id: 'entry-bed', kind: 'bed', worldX: 520 },
+      { id: 'entry-iv-stand', kind: 'iv-stand', worldX: 645 },
       { id: 'entry-warning', kind: 'graffiti', worldX: 710, text: 'ハシレ', color: '#8a2f27' },
       { id: 'entry-wheelchair', kind: 'wheelchair', worldX: 850 },
+      { id: 'entry-reflection', kind: 'wet-reflection', worldX: 1040 },
     ],
   },
   {
@@ -177,8 +184,10 @@ export const HOSPITAL_SCENE_DEFINITIONS: readonly SceneDefinition[] = [
       { id: 'ward-door', kind: 'door', worldX: 1200, label: '第一病棟 A-3' },
       { id: 'ward-locker', kind: 'locker', worldX: 1450, open: true },
       { id: 'ward-camera-warning', kind: 'graffiti', worldX: 1610, text: '右上ヲ見ロ', color: '#8a2f27' },
+      { id: 'ward-medicine-cart', kind: 'medicine-cart', worldX: 1710 },
       { id: 'ward-window', kind: 'window', worldX: 1820, y: 65, width: 84, height: 72 },
       { id: 'ward-gurney', kind: 'gurney', worldX: 2050 },
+      { id: 'ward-curtain', kind: 'curtain', worldX: 2240 },
     ],
   },
   {
@@ -193,6 +202,8 @@ export const HOSPITAL_SCENE_DEFINITIONS: readonly SceneDefinition[] = [
       { id: 'clinical-writing', kind: 'graffiti', worldX: 2710, text: 'お前の名前', color: '#8a2f27' },
       { id: 'clinical-wheelchair', kind: 'wheelchair', worldX: 2895 },
       { id: 'clinical-window', kind: 'window', worldX: 3100, y: 68, width: 60, height: 86 },
+      { id: 'clinical-crt', kind: 'crt', worldX: 3290 },
+      { id: 'clinical-reflection', kind: 'wet-reflection', worldX: 3440 },
     ],
   },
   {
@@ -203,9 +214,12 @@ export const HOSPITAL_SCENE_DEFINITIONS: readonly SceneDefinition[] = [
     ambientLights: [{ id: 'basement-light-01', worldX: 3890 }],
     props: [
       { id: 'basement-door', kind: 'door', worldX: 3600, label: '地下電波室' },
+      { id: 'basement-crt', kind: 'crt', worldX: 3705 },
       { id: 'basement-gurney', kind: 'gurney', worldX: 3820 },
       { id: 'basement-signal', kind: 'graffiti', worldX: 3880, text: 'NO SIGNAL', color: '#707875' },
+      { id: 'basement-reflection', kind: 'wet-reflection', worldX: 3985 },
       { id: 'basement-locker', kind: 'locker', worldX: 4090, open: false },
+      { id: 'basement-curtain', kind: 'curtain', worldX: 4320 },
     ],
   },
   {

@@ -16,6 +16,15 @@ import {
   PlayerSpriteFrameInput,
   PlayerSpritePose,
 } from '../game/playerSprite';
+import {
+  drawAtlasCell,
+  getHospitalAssetAtlasCell,
+  getObserverAtlasCell,
+  getRuntimeAtlasLoadState,
+  selectPlayerAtlasCell,
+  type HospitalAssetKey,
+  type ObserverAtlasTier,
+} from '../game/runtimeVisualAssets';
 
 export const PIXEL_VIEW_WIDTH = 640;
 export const PIXEL_VIEW_HEIGHT = 300;
@@ -23,6 +32,28 @@ export const PIXEL_FLOOR_Y = 238;
 
 export const ITEM_WORLD_POSITIONS: Readonly<Record<string, number>> =
   HOSPITAL_ITEM_WORLD_POSITIONS;
+
+interface RuntimePropLayout {
+  readonly width: number;
+  readonly height: number;
+  readonly y: number;
+}
+
+const HOSPITAL_PROP_LAYOUTS: Readonly<
+  Partial<Record<HospitalAssetKey, RuntimePropLayout>>
+> = {
+  bed: { width: 128, height: 84, y: 155 },
+  gurney: { width: 112, height: 78, y: 160 },
+  wheelchair: { width: 96, height: 86, y: 151 },
+  'iv-stand': { width: 128, height: 95, y: 143 },
+  'medicine-cart': { width: 116, height: 84, y: 153 },
+  'locker-closed': { width: 166, height: 112, y: 135 },
+  'locker-open': { width: 166, height: 112, y: 135 },
+  crt: { width: 112, height: 86, y: 158 },
+  door: { width: 178, height: 138, y: 117 },
+  curtain: { width: 158, height: 143, y: 45 },
+  'wet-reflection': { width: 145, height: 52, y: 216 },
+};
 
 export type SceneRenderChannel = 'main' | 'pip';
 
@@ -391,6 +422,130 @@ function drawStairs(
   ctx.globalAlpha = 1;
 }
 
+function getHospitalRuntimePropKey(
+  prop: WorldPropDefinition,
+): HospitalAssetKey | null {
+  switch (prop.kind) {
+    case 'bed':
+    case 'gurney':
+    case 'wheelchair':
+    case 'iv-stand':
+    case 'medicine-cart':
+    case 'crt':
+    case 'door':
+    case 'curtain':
+    case 'wet-reflection':
+      return prop.kind;
+    case 'locker':
+      return prop.open ? 'locker-open' : 'locker-closed';
+    default:
+      return null;
+  }
+}
+
+function drawHospitalRuntimeProp(
+  ctx: CanvasRenderingContext2D,
+  prop: WorldPropDefinition,
+  screenX: number,
+  boardId: BoardId,
+): boolean {
+  if (boardId !== 'hospital') return false;
+  const key = getHospitalRuntimePropKey(prop);
+  if (!key) return false;
+  const layout = HOSPITAL_PROP_LAYOUTS[key];
+  if (!layout) return false;
+  return drawAtlasCell(
+    ctx,
+    'hospital-props',
+    getHospitalAssetAtlasCell(key),
+    {
+      x: Math.round(screenX - layout.width / 2),
+      y: layout.y,
+      width: layout.width,
+      height: layout.height,
+    },
+  );
+}
+
+function drawIvStandFallback(ctx: CanvasRenderingContext2D, screenX: number) {
+  const x = Math.round(screenX);
+  ctx.strokeStyle = '#50534c';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(x, 151);
+  ctx.lineTo(x, 231);
+  ctx.moveTo(x - 12, 154);
+  ctx.lineTo(x + 12, 154);
+  ctx.moveTo(x, 231);
+  ctx.lineTo(x - 10, 237);
+  ctx.moveTo(x, 231);
+  ctx.lineTo(x + 10, 237);
+  ctx.stroke();
+  fillPixelRect(ctx, x - 9, 158, 8, 18, '#66736d');
+  fillPixelRect(ctx, x - 8, 160, 6, 13, '#89938b');
+}
+
+function drawMedicineCartFallback(
+  ctx: CanvasRenderingContext2D,
+  screenX: number,
+  palette: ScenePalette,
+) {
+  const x = Math.round(screenX);
+  fillPixelRect(ctx, x - 27, 174, 54, 48, palette.metal);
+  fillPixelRect(ctx, x - 24, 178, 48, 12, '#272b27');
+  fillPixelRect(ctx, x - 24, 194, 48, 3, '#151715');
+  fillPixelRect(ctx, x - 24, 206, 48, 3, '#151715');
+  fillPixelRect(ctx, x - 23, 222, 3, 12, palette.metal);
+  fillPixelRect(ctx, x + 20, 222, 3, 12, palette.metal);
+}
+
+function drawCrtFallback(ctx: CanvasRenderingContext2D, screenX: number) {
+  const x = Math.round(screenX);
+  fillPixelRect(ctx, x - 27, 185, 54, 45, '#292d2b');
+  fillPixelRect(ctx, x - 21, 191, 42, 29, '#54615f');
+  for (let line = 0; line < 8; line += 1) {
+    fillPixelRect(
+      ctx,
+      x - 18 + (line % 2) * 5,
+      194 + line * 3,
+      31 - (line % 3) * 4,
+      1,
+      'rgba(196,211,204,0.44)',
+    );
+  }
+}
+
+function drawCurtainFallback(
+  ctx: CanvasRenderingContext2D,
+  screenX: number,
+  palette: ScenePalette,
+) {
+  const x = Math.round(screenX);
+  fillPixelRect(ctx, x - 54, 63, 108, 3, palette.metal);
+  for (let strip = 0; strip < 8; strip += 1) {
+    fillPixelRect(
+      ctx,
+      x - 48 + strip * 13,
+      67,
+      10,
+      96 - (strip % 3) * 7,
+      strip % 2 ? '#343630' : '#3e4037',
+    );
+  }
+}
+
+function drawWetReflectionFallback(
+  ctx: CanvasRenderingContext2D,
+  screenX: number,
+) {
+  const x = Math.round(screenX);
+  ctx.globalAlpha = 0.28;
+  fillPixelRect(ctx, x - 46, PIXEL_FLOOR_Y + 5, 92, 16, '#4e6666');
+  fillPixelRect(ctx, x - 4, PIXEL_FLOOR_Y + 2, 8, 27, '#809592');
+  fillPixelRect(ctx, x - 29, PIXEL_FLOOR_Y + 26, 58, 2, '#263635');
+  ctx.globalAlpha = 1;
+}
+
 function drawWorldProp(
   ctx: CanvasRenderingContext2D,
   prop: WorldPropDefinition,
@@ -398,8 +553,10 @@ function drawWorldProp(
   palette: ScenePalette,
   channel: SceneRenderChannel,
   boardDifferenceActive: boolean,
+  boardId: BoardId,
 ) {
   const screenX = worldToScreen(prop.worldX, playerX);
+  if (drawHospitalRuntimeProp(ctx, prop, screenX, boardId)) return;
   switch (prop.kind) {
     case 'window':
       drawWindow(
@@ -425,6 +582,21 @@ function drawWorldProp(
       break;
     case 'gurney':
       drawGurney(ctx, screenX, palette);
+      break;
+    case 'iv-stand':
+      drawIvStandFallback(ctx, screenX);
+      break;
+    case 'medicine-cart':
+      drawMedicineCartFallback(ctx, screenX, palette);
+      break;
+    case 'crt':
+      drawCrtFallback(ctx, screenX);
+      break;
+    case 'curtain':
+      drawCurtainFallback(ctx, screenX, palette);
+      break;
+    case 'wet-reflection':
+      drawWetReflectionFallback(ctx, screenX);
       break;
     case 'altar':
       drawAltar(ctx, screenX, palette);
@@ -496,6 +668,7 @@ function drawEnvironment(
         scene.palette,
         channel,
         boardDifferenceActive,
+        boardId,
       ),
     );
   });
@@ -507,6 +680,7 @@ function drawItem(
   playerX: number,
   now: number,
   itemPositions: Readonly<Record<string, number>>,
+  boardId: BoardId,
 ) {
   if (item.found) return;
   const worldX = itemPositions[item.id];
@@ -522,13 +696,23 @@ function drawItem(
   ctx.fillStyle = glow;
   ctx.fillRect(x - 28, y - 28, 56, 56);
   ctx.globalAlpha = 1;
-  if (item.type === 'keycard') {
-    fillPixelRect(ctx, x - 7, y - 4, 14, 9, '#5e7775');
-    fillPixelRect(ctx, x - 5, y - 2, 4, 2, '#b7c8bf');
-  } else {
-    fillPixelRect(ctx, x - 6, y - 7, 12, 14, '#a9946d');
-    fillPixelRect(ctx, x - 4, y - 4, 8, 1, '#5c4e37');
-    fillPixelRect(ctx, x - 4, y - 1, 7, 1, '#5c4e37');
+  const runtimeItemDrawn =
+    boardId === 'hospital' &&
+    drawAtlasCell(
+      ctx,
+      'hospital-props',
+      getHospitalAssetAtlasCell(item.type),
+      { x: x - 26, y: y - 18, width: 52, height: 40 },
+    );
+  if (!runtimeItemDrawn) {
+    if (item.type === 'keycard') {
+      fillPixelRect(ctx, x - 7, y - 4, 14, 9, '#5e7775');
+      fillPixelRect(ctx, x - 5, y - 2, 4, 2, '#b7c8bf');
+    } else {
+      fillPixelRect(ctx, x - 6, y - 7, 12, 14, '#a9946d');
+      fillPixelRect(ctx, x - 4, y - 4, 8, 1, '#5c4e37');
+      fillPixelRect(ctx, x - 4, y - 1, 7, 1, '#5c4e37');
+    }
   }
   if (near) {
     fillPixelRect(ctx, x - 34, y - 28, 68, 13, 'rgba(3,3,3,0.86)');
@@ -539,6 +723,45 @@ function drawItem(
     ctx.textAlign = 'center';
     ctx.fillText('[ E ] 調べる', x, y - 19);
   }
+}
+
+const OBSERVER_ANOMALY_ID = 'hospital.anomaly.door-figure';
+
+function getObserverTierForRisk(riskTier: RiskTier): ObserverAtlasTier {
+  if (riskTier >= 3) return 'near';
+  if (riskTier >= 2) return 'mid';
+  return 'far';
+}
+
+function drawRuntimeObserver(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  floorOffset: number,
+  riskTier: RiskTier,
+  alpha: number,
+): boolean {
+  const tier = getObserverTierForRisk(riskTier);
+  const layout: Readonly<Record<ObserverAtlasTier, RuntimePropLayout>> = {
+    far: { width: 76, height: 90, y: 0 },
+    mid: { width: 90, height: 94, y: 0 },
+    near: { width: 80, height: 104, y: 0 },
+  };
+  const anchorRatio: Readonly<Record<ObserverAtlasTier, number>> = {
+    far: 0.86,
+    mid: 0.86,
+    near: 0.885,
+  };
+  const { width, height } = layout[tier];
+  const y = Math.round(
+    PIXEL_FLOOR_Y + floorOffset - height * anchorRatio[tier],
+  );
+  return drawAtlasCell(ctx, 'observer', getObserverAtlasCell(tier), {
+    x: Math.round(x - width / 2),
+    y,
+    width,
+    height,
+    alpha,
+  });
 }
 
 function drawAnomaly(
@@ -566,8 +789,21 @@ function drawAnomaly(
   const proximity = clamp((detectionRange - distance) / detectionRange, 0, 1);
   if (proximity <= 0) return;
   const y = PIXEL_FLOOR_Y - 64 + (anomaly.yOffset ?? 0);
+  const presentationAlpha = profile.alpha * (0.45 + proximity * 0.55);
+  if (
+    anomaly.id === OBSERVER_ANOMALY_ID &&
+    drawRuntimeObserver(
+      ctx,
+      x,
+      anomaly.yOffset ?? 0,
+      riskTier,
+      presentationAlpha,
+    )
+  ) {
+    return;
+  }
   ctx.save();
-  ctx.globalAlpha = profile.alpha * (0.45 + proximity * 0.55);
+  ctx.globalAlpha = presentationAlpha;
   switch (profile.fragmentKind) {
     case 'TRACE': {
       const pulse = 0.75 + Math.sin(now / 420) * 0.08;
@@ -630,7 +866,11 @@ function drawFlashlightMask(
 ) {
   const playerX = PIXEL_VIEW_WIDTH * 0.42;
   const direction = mouse.x >= playerX ? 1 : -1;
-  const startX = playerX + direction * pose.flashlightSocket.x;
+  const flashlightSocketX =
+    getRuntimeAtlasLoadState('player') === 'ready'
+      ? 30
+      : pose.flashlightSocket.x;
+  const startX = playerX + direction * flashlightSocketX;
   const startY = PIXEL_FLOOR_Y + pose.flashlightSocket.y;
   const dx = mouse.x - startX;
   const dy = mouse.y - startY;
@@ -671,9 +911,35 @@ function drawPixelCharacter(
   ctx: CanvasRenderingContext2D,
   mouse: { x: number; y: number },
   spriteInput: PlayerSpriteFrameInput,
+  player: PlayerState,
 ) {
   const x = Math.round(PIXEL_VIEW_WIDTH * 0.42);
   const direction = mouse.x >= x ? 1 : -1;
+  const runtimeCell = selectPlayerAtlasCell({
+    now: spriteInput.now,
+    isMoving: spriteInput.isMoving,
+    isRunning: spriteInput.isRunning,
+    isCrouching: spriteInput.isCrouching,
+    isAiming: player.flashlightOn && player.battery > 0,
+    reaction:
+      player.tension >= 90
+        ? 'startled'
+        : player.tension >= 70 && !spriteInput.isMoving
+          ? 'fatigued'
+          : null,
+  });
+  const runtimeY = runtimeCell.row === 0 ? 144 : 158;
+  if (
+    drawAtlasCell(ctx, 'player', runtimeCell, {
+      x: x - 59,
+      y: runtimeY,
+      width: 118,
+      height: 104,
+      flipX: direction < 0,
+    })
+  ) {
+    return;
+  }
   const frame = createPlayerSpriteFrame(spriteInput);
   ctx.save();
   ctx.translate(x, PIXEL_FLOOR_Y);
@@ -760,8 +1026,11 @@ export function renderPixelScene({
     channel,
     boardDifferenceActive,
   );
-  items.forEach((item) => drawItem(ctx, item, player.x, now, itemPositions));
-  anomalies.forEach((anomaly) =>
+  items.forEach((item) =>
+    drawItem(ctx, item, player.x, now, itemPositions, boardId),
+  );
+  anomalies.forEach((anomaly) => {
+    if (anomaly.id === OBSERVER_ANOMALY_ID) return;
     drawAnomaly(
       ctx,
       anomaly,
@@ -770,12 +1039,24 @@ export function renderPixelScene({
       channel,
       riskTier,
       loopCount,
-    ),
-  );
+    );
+  });
   if (channel === 'main') {
-    drawPixelCharacter(ctx, mouse, spriteInput);
+    drawPixelCharacter(ctx, mouse, spriteInput, player);
   }
   drawFlashlightMask(ctx, player, mouse, channel, playerPose);
+  anomalies.forEach((anomaly) => {
+    if (anomaly.id !== OBSERVER_ANOMALY_ID) return;
+    drawAnomaly(
+      ctx,
+      anomaly,
+      player,
+      now,
+      channel,
+      riskTier,
+      loopCount,
+    );
+  });
   if (channel === 'main') {
     drawScreenNoise(ctx, now, player.tension);
   }
