@@ -41,6 +41,7 @@ const makeSnapshot = (
   mouseX = PIP_LOGICAL_VIEW_WIDTH * 0.82,
 ): SceneSnapshot => ({
   timestamp: 1_000,
+  boardId: 'hospital',
   sceneId: 'hospital-entry',
   player: { ...BASE_PLAYER, ...playerOverrides },
   anomalies: anomaly ? [anomaly] : [],

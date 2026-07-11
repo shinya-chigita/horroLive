@@ -2,7 +2,7 @@
 
 コメント欄と配信用カメラの「見え方のズレ」を使って怪異を発見する、ブラウザ向け2Dサイドスクロール・ホラーゲームです。
 
-封鎖された廃病院を生配信しながら探索し、肉眼では見えない怪異をPIPカメラで記録します。視聴者コメントには攻略の手掛かりも混ざりますが、すべてが人間から届いた言葉とは限りません。
+廃病院または下校放送の止まらない旧校舎を生配信しながら探索し、肉眼では見えない怪異をPIPカメラで記録します。視聴者コメントには攻略の手掛かりも混ざりますが、すべてが人間から届いた言葉とは限りません。
 
 ## ゲームの特徴
 
@@ -12,6 +12,8 @@
 - **動的な恐怖演出** — プレイヤーの位置、ライト、緊張度に応じてコメント、音、映像が変化します。
 - **視聴者数＝リスク** — 237 → 2,370 → 23,700 → 237,000の段階で配信への侵食が強くなります。
 - **記録と分岐** — 怪異の撮影数、発見した手掛かり、最終視聴者数によって結末が変わります。
+- **二つの盤面** — 廃病院と廃校で、章・証拠・怪異・進行ルールがすべて変わります。廃校では必要な録音テープを見つけるまで同じ廊下へ戻されます。
+- **周回記録** — 盤面ごとのクリア、エンディング、アーカイブ率を端末に保存。初回クリア後は高難度の「深夜再送」を選べます。
 - **PC・タッチ操作対応** — キーボードに加え、画面上の操作ボタンでも進行できます。
 
 ## 操作方法
@@ -58,9 +60,9 @@ npm run build
 - Web Audio API
 - lucide-react
 
-ゲーム進行と配信状態は `src/AppV2.tsx`、リアルタイムの探索描画は `src/components/MainGameView.tsx`、PIP映像と音響はそれぞれ専用コンポーネント／ユーティリティに分離しています。MainとPIPは `src/game/sceneSnapshot.ts` の共通SceneSnapshot履歴を使い、背景・設備は `src/game/sceneDefinitions.ts` でデータ定義しています。
+ゲーム進行と配信状態は `src/AppV2.tsx`、盤面は `src/game/boardDefinitions.ts`、リアルタイムの探索描画は `src/components/MainGameView.tsx` に分離しています。MainとPIPは `src/game/sceneSnapshot.ts` の共通SceneSnapshot履歴を使い、背景・設備は `src/game/sceneDefinitions.ts` でデータ定義しています。
 
-設計の基準は [Art Direction v3.1](docs/ART_DIRECTION_V3_1.md)、画面構造は [Wireframes v3.1](docs/WIREFRAMES_V3_1.md) を参照してください。
+設計の基準は [Art Direction v3.1](docs/ART_DIRECTION_V3_1.md)、画面構造は [Wireframes v3.1](docs/WIREFRAMES_V3_1.md)、今回の盤面・周回拡張は [Expansion v3.2](docs/EXPANSION_V3_2.md) を参照してください。
 
 ## デプロイ
 

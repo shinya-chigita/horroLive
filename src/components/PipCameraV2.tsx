@@ -13,7 +13,14 @@ import {
   SignalLow,
   WifiOff,
 } from 'lucide-react';
-import { Anomaly, GameItem, PlayerState, RiskTier } from '../types';
+import {
+  Anomaly,
+  AnomalyDirectorPhase,
+  BoardId,
+  GameItem,
+  PlayerState,
+  RiskTier,
+} from '../types';
 import {
   PIXEL_VIEW_HEIGHT,
   PIXEL_VIEW_WIDTH,
@@ -28,6 +35,7 @@ import {
   CameraCaptureTarget,
   evaluatePipCapture,
 } from '../game/capture';
+import { getActivePipCameraEffect } from '../game/anomalyPresentation';
 
 export interface PipCameraV2Props {
   currentAnomaly: Anomaly | null;
@@ -40,8 +48,12 @@ export interface PipCameraV2Props {
   player?: PlayerState;
   anomalies?: Anomaly[];
   items?: GameItem[];
+  boardId: BoardId;
+  runId: string;
+  loopCount?: number;
   riskTier?: RiskTier;
   reducedMotion?: boolean;
+  isPaused?: boolean;
 }
 
 interface FeedMetadata {
@@ -51,9 +63,11 @@ interface FeedMetadata {
   flashlightOn: boolean;
   riskTier: RiskTier;
   reducedMotion: boolean;
+  isPaused: boolean;
 }
 
 interface CanonicalFallback {
+  boardId: BoardId;
   player?: PlayerState;
   anomalies?: Anomaly[];
   items?: GameItem[];
@@ -73,6 +87,7 @@ function fallbackSnapshot(
   const direction = fallback.player.flashlightAngle < -Math.PI / 2 ? -1 : 1;
   return createSceneSnapshot({
     timestamp: now,
+    boardId: fallback.boardId,
     player: fallback.player,
     anomalies: fallback.anomalies,
     items: fallback.items,
@@ -94,10 +109,15 @@ function PipCameraV2({
   player,
   anomalies,
   items,
+  boardId,
+  runId,
+  loopCount = 0,
   riskTier = 0,
   reducedMotion = false,
+  isPaused = false,
 }: PipCameraV2Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const loopCountRef = useRef(loopCount);
   const feedRef = useRef<FeedMetadata>({
     anomaly: currentAnomaly,
     distance: anomalyDistance,
@@ -105,8 +125,14 @@ function PipCameraV2({
     flashlightOn,
     riskTier,
     reducedMotion,
+    isPaused,
   });
-  const canonicalFallbackRef = useRef<CanonicalFallback>({ player, anomalies, items });
+  const canonicalFallbackRef = useRef<CanonicalFallback>({
+    boardId,
+    player,
+    anomalies,
+    items,
+  });
   const captureTimerRef = useRef<number | null>(null);
   const mistimeUntilRef = useRef(0);
   const displayedTargetRef = useRef<CameraCaptureTarget | null>(null);
@@ -122,8 +148,10 @@ function PipCameraV2({
     flashlightOn,
     riskTier,
     reducedMotion,
+    isPaused,
   };
-  canonicalFallbackRef.current = { player, anomalies, items };
+  canonicalFallbackRef.current = { boardId, player, anomalies, items };
+  loopCountRef.current = loopCount;
   targetChangeRef.current = onTargetChange;
 
   const signal = useMemo(() => {
@@ -175,9 +203,16 @@ function PipCameraV2({
     let previousFrame = 0;
     let lastNoiseAt = 0;
     let frozenUntil = 0;
-    let repeatUntil = 0;
     let focusBlurUntil = 0;
-    let heldSnapshot: SceneSnapshot | null = null;
+    let pausedAt: number | null = null;
+    const firedCameraEffects = new Set<string>();
+    const phaseByAnomaly = new Map<string, AnomalyDirectorPhase>();
+    canonicalFallbackRef.current.anomalies?.forEach((anomaly) => {
+      phaseByAnomaly.set(
+        anomaly.id,
+        anomaly.directorState?.phase ?? 'DORMANT',
+      );
+    });
 
     ctx.fillStyle = '#030504';
     ctx.fillRect(0, 0, WIDTH, HEIGHT);
@@ -185,6 +220,40 @@ function PipCameraV2({
     const render = (now: number) => {
       animationId = window.requestAnimationFrame(render);
       const metadata = feedRef.current;
+      if (metadata.isPaused) {
+        if (pausedAt === null) pausedAt = now;
+        return;
+      }
+      if (pausedAt !== null) {
+        const pausedFor = Math.max(0, now - pausedAt);
+        if (frozenUntil > pausedAt) frozenUntil += pausedFor;
+        if (focusBlurUntil > pausedAt) focusBlurUntil += pausedFor;
+        previousFrame = now;
+        pausedAt = null;
+      }
+
+      canonicalFallbackRef.current.anomalies?.forEach((anomaly) => {
+        const phase = anomaly.directorState?.phase ?? 'DORMANT';
+        const previousPhase = phaseByAnomaly.get(anomaly.id) ?? 'DORMANT';
+        if (phase !== previousPhase) {
+          const effect = getActivePipCameraEffect({
+            boardId,
+            anomaly,
+            previousPhase,
+            reducedEffects: metadata.reducedMotion,
+          });
+          if (effect && !firedCameraEffects.has(effect.key)) {
+            firedCameraEffects.add(effect.key);
+            frozenUntil = Math.max(frozenUntil, now + effect.durationMs);
+            focusBlurUntil = Math.max(
+              focusBlurUntil,
+              frozenUntil + (metadata.reducedMotion ? 0 : 160),
+            );
+          }
+        }
+        phaseByAnomaly.set(anomaly.id, phase);
+      });
+
       const baseDistortion = clamp(
         Math.max(metadata.tension / 100, metadata.riskTier * 0.18),
         0,
@@ -198,45 +267,18 @@ function PipCameraV2({
       if (now - previousFrame < frameInterval) return;
       previousFrame = now;
 
-      // Leaving the existing canvas untouched is an intentional frame freeze/repeat.
+      // A camera-only ACTIVE transition deliberately holds the last TELEGRAPH frame.
       if (now < frozenUntil) return;
-      if (
-        !metadata.reducedMotion &&
-        distortion > 0.5 &&
-        Math.random() < 0.006 + distortion * 0.026
-      ) {
-        const freezeDuration = 250 + Math.random() * (160 + distortion * 490);
-        frozenUntil = now + freezeDuration;
-        focusBlurUntil = frozenUntil + 110 + distortion * 140;
-        return;
-      }
-      if (
-        !metadata.reducedMotion &&
-        distortion > 0.42 &&
-        Math.random() < 0.012 + distortion * 0.035
-      ) {
-        return;
-      }
 
-      let snapshot: SceneSnapshot | null;
-      if (heldSnapshot && now < repeatUntil) {
-        snapshot = heldSnapshot;
-      } else {
-        // The slow wave avoids a mechanically fixed delay while remaining 400–700ms.
-        const delayMs = 550 + Math.sin(now / 2800) * 150;
-        snapshot =
-          canonicalSceneHistory.atOrBefore(now - delayMs) ??
-          fallbackSnapshot(now - delayMs, canonicalFallbackRef.current);
-        if (!snapshot) return;
-        heldSnapshot = snapshot;
-        if (
-          !metadata.reducedMotion &&
-          distortion > 0.38 &&
-          Math.random() < 0.007 + distortion * 0.019
-        ) {
-          repeatUntil = now + 120 + Math.random() * (130 + distortion * 310);
-        }
+      // The slow wave avoids a mechanically fixed delay while remaining 400–700ms.
+      const delayMs = 550 + Math.sin(now / 2800) * 150;
+      let snapshot =
+        canonicalSceneHistory.atOrBefore(now - delayMs) ??
+        fallbackSnapshot(now - delayMs, canonicalFallbackRef.current);
+      if (snapshot?.boardId !== boardId) {
+        snapshot = fallbackSnapshot(now - delayMs, canonicalFallbackRef.current);
       }
+      if (!snapshot) return;
 
       const nextTarget = evaluatePipCapture(snapshot, metadata.riskTier);
       const previousTarget = displayedTargetRef.current;
@@ -255,15 +297,14 @@ function PipCameraV2({
       renderPixelScene({
         ctx: sceneCtx,
         player: snapshot.player,
-        anomalies: snapshot.anomalies.map((anomaly) =>
-          anomaly.visibleOnlyInPip && metadata.riskTier === 0
-            ? { ...anomaly, captured: true }
-            : anomaly,
-        ),
+        anomalies: snapshot.anomalies,
         items: snapshot.items,
         mouse: snapshot.mouse,
         now: snapshot.timestamp,
         isMoving: snapshot.isMoving,
+        boardId: snapshot.boardId,
+        riskTier: metadata.riskTier,
+        loopCount: loopCountRef.current,
         channel: 'pip',
         recordSnapshot: false,
       });
@@ -383,7 +424,7 @@ function PipCameraV2({
       displayedTargetRef.current = null;
       targetChangeRef.current?.(null);
     };
-  }, []);
+  }, [boardId, runId]);
 
   useEffect(
     () => () => {
@@ -415,16 +456,14 @@ function PipCameraV2({
       displayedTarget.distance < 390 &&
       displayedTarget.isFramed,
   );
-  const confidence = tracked
-    ? Math.round(
-        clamp(100 - (displayedTarget?.distance ?? 0) / 7.5, 62, 98),
-      )
-    : 0;
   const captureReady = displayedTarget?.canCapture === true;
   const captureUnavailable = displayedTarget?.reason === 'BATTERY_EMPTY';
 
   return (
-    <section className="screen-frame relative aspect-video min-h-[220px] overflow-hidden border border-white/10 bg-black">
+    <section
+      className="screen-frame relative aspect-video min-h-[220px] overflow-hidden border border-white/10 bg-black"
+      aria-label={`${boardId} delayed camera feed`}
+    >
       <canvas
         ref={canvasRef}
         width={WIDTH}
@@ -452,7 +491,7 @@ function PipCameraV2({
       {tracked && (
         <div className="pointer-events-none absolute left-1/2 top-1/2 h-20 w-16 -translate-x-1/2 -translate-y-[56%] border border-zinc-300/55">
           <span className="absolute -top-4 left-0 whitespace-nowrap font-mono text-[6px] uppercase tracking-[0.12em] text-zinc-400">
-            subject? {confidence}%
+            shape drift // uncertain
           </span>
           <span className="absolute -left-px -top-px h-2 w-2 border-l-2 border-t-2 border-zinc-200" />
           <span className="absolute -right-px -top-px h-2 w-2 border-r-2 border-t-2 border-zinc-200" />

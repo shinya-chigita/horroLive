@@ -10,8 +10,11 @@ import type {
   Anomaly,
   AnomalyDirectorPhase,
   AnomalyDirectorState,
+  BoardId,
+  Chapter,
   GameItem,
   PlayerState,
+  RiskTier,
 } from '../types';
 import {
   advanceAnomalyDirector,
@@ -19,16 +22,16 @@ import {
   getAnomalyRuntimeDefinition,
   isAnomalyThreatening,
 } from '../game/anomalyDirector';
-import { getSceneDefinitionAt } from '../game/sceneDefinitions';
+import { getItemWorldPositions, getSceneDefinitionAt } from '../game/sceneDefinitions';
 import { AudioSynth } from '../utils/audio';
 import {
-  ITEM_WORLD_POSITIONS,
   PIXEL_VIEW_HEIGHT,
   PIXEL_VIEW_WIDTH,
   renderPixelScene,
 } from '../utils/pixelScene';
 
 interface MainGameViewProps {
+  key?: React.Key;
   player: PlayerState;
   setPlayer: React.Dispatch<React.SetStateAction<PlayerState>>;
   anomalies: Anomaly[];
@@ -40,10 +43,22 @@ interface MainGameViewProps {
   currentChapterId: number;
   onChapterComplete: () => void;
   onCaptureAnomaly: () => void;
+  boardId?: BoardId;
+  boardLabel?: string;
+  chapters?: readonly Chapter[];
+  worldEnd?: number;
+  riskTier?: RiskTier;
+  loopCount?: number;
+  batteryDrainMultiplier?: number;
+  telegraphDurationMultiplier?: number;
+  activeWindowMultiplier?: number;
+  onAnomalyCue?: (
+    anomaly: Anomaly,
+    phase: AnomalyDirectorPhase,
+    previousPhase: AnomalyDirectorPhase,
+  ) => void;
   isPaused?: boolean;
 }
-
-const WORLD_END_POS = CHAPTERS[CHAPTERS.length - 1]?.endPos ?? 5000;
 
 const ENGAGED_PHASES: ReadonlySet<AnomalyDirectorPhase> = new Set([
   'TELEGRAPH',
@@ -80,6 +95,16 @@ export default function MainGameView({
   currentChapterId,
   onChapterComplete,
   onCaptureAnomaly,
+  boardId = 'hospital',
+  boardLabel = '廃病院「白鳴霊園付属病棟」',
+  chapters = CHAPTERS,
+  worldEnd = 5_000,
+  riskTier = 0,
+  loopCount = 0,
+  batteryDrainMultiplier = 1,
+  telegraphDurationMultiplier = 1,
+  activeWindowMultiplier = 1,
+  onAnomalyCue,
   isPaused = false,
 }: MainGameViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -96,6 +121,8 @@ export default function MainGameView({
   const inspectRef = useRef<() => void>(() => undefined);
   const captureRef = useRef(onCaptureAnomaly);
   const pausedRef = useRef(isPaused);
+  const riskTierRef = useRef(riskTier);
+  const loopCountRef = useRef(loopCount);
   const [isFocused, setIsFocused] = useState(false);
 
   useEffect(() => {
@@ -111,10 +138,18 @@ export default function MainGameView({
   }, [onAnomaliesUpdate]);
 
   useEffect(() => {
+    riskTierRef.current = riskTier;
+  }, [riskTier]);
+
+  useEffect(() => {
+    loopCountRef.current = loopCount;
+  }, [loopCount]);
+
+  useEffect(() => {
     let needsParentSync = false;
     const nextStates: Record<string, AnomalyDirectorState> = {};
     const hydrated = anomalies.map((anomaly) => {
-      const fallbackSceneId = getSceneDefinitionAt(anomaly.x).id;
+      const fallbackSceneId = getSceneDefinitionAt(anomaly.x, boardId).id;
       const definition = getAnomalyRuntimeDefinition(anomaly.id, fallbackSceneId);
       const stored = directorStatesRef.current[anomaly.id];
       const incoming = anomaly.directorState;
@@ -153,7 +188,7 @@ export default function MainGameView({
         }),
       );
     }
-  }, [anomalies]);
+  }, [anomalies, boardId]);
 
   useEffect(() => {
     chapterRef.current = currentChapterId;
@@ -174,9 +209,10 @@ export default function MainGameView({
 
   const handleInspect = () => {
     const currentX = playerRef.current.x;
+    const itemPositions = getItemWorldPositions(boardId);
     const target = itemsRef.current.find((item) => {
       if (item.found) return false;
-      const itemX = ITEM_WORLD_POSITIONS[item.id];
+      const itemX = itemPositions[item.id];
       return itemX !== undefined && Math.abs(currentX - itemX) < 72;
     });
 
@@ -190,7 +226,7 @@ export default function MainGameView({
 
   useEffect(() => {
     inspectRef.current = handleInspect;
-  }, [items, onAddLog, onPickupItem, player.x]);
+  }, [boardId, items, onAddLog, onPickupItem, player.x]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -253,6 +289,24 @@ export default function MainGameView({
     let previousAt = performance.now();
     let footstepDistance = 0;
 
+    const getRuntimeDefinition = (anomaly: Anomaly) => {
+      const fallbackSceneId =
+        anomaly.sceneId ?? getSceneDefinitionAt(anomaly.x, boardId).id;
+      const definition = getAnomalyRuntimeDefinition(
+        anomaly.id,
+        fallbackSceneId,
+      );
+      return {
+        ...definition,
+        telegraphDurationMs: Math.round(
+          definition.telegraphDurationMs * telegraphDurationMultiplier,
+        ),
+        activeWindowMs: Math.round(
+          definition.activeWindowMs * activeWindowMultiplier,
+        ),
+      };
+    };
+
     const announceTransition = (
       anomaly: Anomaly,
       previous: AnomalyDirectorState,
@@ -262,21 +316,25 @@ export default function MainGameView({
       switch (next.phase) {
         case 'TELEGRAPH':
           onAddLog(`【予兆】${anomaly.description}の気配が、映像の端に混じった。`);
-          onTriggerScare('whisper');
+          onAnomalyCue?.(anomaly, next.phase, previous.phase);
           break;
         case 'ACTIVE':
           onAddLog(`【異常検知】${anomaly.description}。今なら記録できる。`);
+          onAnomalyCue?.(anomaly, next.phase, previous.phase);
           onTriggerScare(
-            anomaly.type === 'ghost' || anomaly.type === 'shadow'
+            chapterRef.current === chapters.length &&
+              anomaly.x >= worldEnd - 600
               ? 'jumpscare'
               : 'whisper',
           );
           break;
         case 'IGNORED':
           onAddLog(`【見送り】${anomaly.description}を記録せず、その場を離れた。`);
+          onAnomalyCue?.(anomaly, next.phase, previous.phase);
           break;
         case 'MISSED':
           onAddLog(`【記録失敗】${anomaly.description}の撮影可能時間を逃した。`);
+          onAnomalyCue?.(anomaly, next.phase, previous.phase);
           break;
       }
     };
@@ -287,8 +345,7 @@ export default function MainGameView({
     ): Anomaly => {
       const state = states[anomaly.id];
       if (!state) return anomaly;
-      const fallbackSceneId = getSceneDefinitionAt(anomaly.x).id;
-      const definition = getAnomalyRuntimeDefinition(anomaly.id, fallbackSceneId);
+      const definition = getRuntimeDefinition(anomaly);
       const sceneId = anomaly.sceneId ?? definition.sceneId;
       if (
         anomaly.sceneId === sceneId &&
@@ -319,15 +376,14 @@ export default function MainGameView({
 
     const advanceRuntime = (nowMs: number, playerX: number) => {
       const currentAnomalies = anomaliesRef.current;
-      const currentSceneId = getSceneDefinitionAt(playerX).id;
+      const currentSceneId = getSceneDefinitionAt(playerX, boardId).id;
       const nextStates = { ...directorStatesRef.current };
       let changed = false;
 
       const advanceOne = (anomaly: Anomaly) => {
         const state = nextStates[anomaly.id];
         if (!state) return;
-        const fallbackSceneId = anomaly.sceneId ?? getSceneDefinitionAt(anomaly.x).id;
-        const definition = getAnomalyRuntimeDefinition(anomaly.id, fallbackSceneId);
+        const definition = getRuntimeDefinition(anomaly);
         const next = advanceAnomalyDirector(state, definition, {
           nowMs,
           sceneId: currentSceneId,
@@ -362,22 +418,15 @@ export default function MainGameView({
         const candidate = withRuntime
           .filter((anomaly) => {
             if (anomaly.captured || anomaly.directorState?.phase !== 'DORMANT') return false;
-            const fallbackSceneId = anomaly.sceneId ?? getSceneDefinitionAt(anomaly.x).id;
-            const definition = getAnomalyRuntimeDefinition(anomaly.id, fallbackSceneId);
+            const definition = getRuntimeDefinition(anomaly);
             return (
               definition.sceneId === currentSceneId &&
               Math.abs(playerX - anomaly.x) <= definition.telegraphDistance
             );
           })
           .sort((left, right) => {
-            const leftDefinition = getAnomalyRuntimeDefinition(
-              left.id,
-              left.sceneId ?? getSceneDefinitionAt(left.x).id,
-            );
-            const rightDefinition = getAnomalyRuntimeDefinition(
-              right.id,
-              right.sceneId ?? getSceneDefinitionAt(right.x).id,
-            );
+            const leftDefinition = getRuntimeDefinition(left);
+            const rightDefinition = getRuntimeDefinition(right);
             return (
               rightDefinition.priority - leftDefinition.priority ||
               Math.abs(playerX - left.x) - Math.abs(playerX - right.x)
@@ -412,7 +461,7 @@ export default function MainGameView({
       const direction = left === right ? 0 : left ? -1 : 1;
       const speed = crouch ? 48 : run ? 192 : 108;
       const deltaX = direction * speed * dt;
-      const nextX = Math.max(0, Math.min(WORLD_END_POS, current.x + deltaX));
+      const nextX = Math.max(0, Math.min(worldEnd, current.x + deltaX));
       const isRunning = direction !== 0 && run && !crouch;
       const isCrouching = crouch;
 
@@ -434,9 +483,12 @@ export default function MainGameView({
             ? 0.3
             : 0.46
         : 0;
-      const nextBattery = Math.max(0, current.battery - drainPerSecond * dt);
+      const nextBattery = Math.max(
+        0,
+        current.battery - drainPerSecond * batteryDrainMultiplier * dt,
+      );
 
-      const chapter = CHAPTERS.find(
+      const chapter = chapters.find(
         (candidate) => candidate.id === chapterRef.current,
       );
       if (chapter && nextX >= chapter.endPos) {
@@ -479,7 +531,19 @@ export default function MainGameView({
 
     animationId = window.requestAnimationFrame(tick);
     return () => window.cancelAnimationFrame(animationId);
-  }, [onAddLog, onChapterComplete, onTriggerScare, setPlayer]);
+  }, [
+    activeWindowMultiplier,
+    batteryDrainMultiplier,
+    boardId,
+    chapters,
+    onAddLog,
+    onAnomalyCue,
+    onChapterComplete,
+    onTriggerScare,
+    setPlayer,
+    telegraphDurationMultiplier,
+    worldEnd,
+  ]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -509,12 +573,15 @@ export default function MainGameView({
         mouse: mousePos.current,
         now,
         isMoving: moving,
+        boardId,
+        riskTier: riskTierRef.current,
+        loopCount: loopCountRef.current,
       });
     };
 
     animationId = window.requestAnimationFrame(render);
     return () => window.cancelAnimationFrame(animationId);
-  }, []);
+  }, [boardId]);
 
   const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
     if (
@@ -584,7 +651,7 @@ export default function MainGameView({
       onClick={() => containerRef.current?.focus()}
       onPointerMove={handlePointerMove}
       className="screen-frame relative isolate w-full overflow-hidden border border-white/10 bg-black outline-none transition-colors focus:border-stone-500/55"
-      aria-label="廃病院探索画面"
+      aria-label={`${boardLabel}探索画面`}
     >
       <canvas
         ref={canvasRef}
@@ -602,7 +669,7 @@ export default function MainGameView({
       </div>
 
       <div className="pointer-events-none absolute right-3 top-3 border border-white/10 bg-black/72 px-2 py-1 font-mono text-[8px] uppercase tracking-[0.12em] text-zinc-600">
-        pos {Math.round(player.x).toString().padStart(4, '0')} / {WORLD_END_POS}
+        pos {Math.round(player.x).toString().padStart(4, '0')} / {worldEnd}
       </div>
 
       {!isFocused && (
