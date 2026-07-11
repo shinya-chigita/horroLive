@@ -3,10 +3,16 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useRef, useEffect, useState } from 'react';
-import { GameItem, Anomaly, PlayerState } from '../types';
-import { ArrowLeftRight } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { ArrowLeft, ArrowRight, Camera, Flashlight, Search, Zap } from 'lucide-react';
+import { Anomaly, GameItem, PlayerState } from '../types';
 import { AudioSynth } from '../utils/audio';
+import {
+  ITEM_WORLD_POSITIONS,
+  PIXEL_VIEW_HEIGHT,
+  PIXEL_VIEW_WIDTH,
+  renderPixelScene,
+} from '../utils/pixelScene';
 
 interface MainGameViewProps {
   player: PlayerState;
@@ -22,20 +28,25 @@ interface MainGameViewProps {
   onCaptureAnomaly: () => void;
 }
 
-interface DustParticle {
-  x: number;
-  y: number;
-  vx: number;
-  vy: number;
-  size: number;
-  alpha: number;
-}
+const isTypingTarget = (target: EventTarget | null) => {
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName.toLowerCase();
+  return tag === 'input' || tag === 'textarea' || target.isContentEditable;
+};
+
+const setPressed = (
+  keys: React.MutableRefObject<Record<string, boolean>>,
+  key: string,
+  value: boolean,
+) => {
+  keys.current[key] = value;
+};
 
 export default function MainGameView({
   player,
   setPlayer,
   anomalies,
-  onAnomaliesUpdate,
+  onAnomaliesUpdate: _onAnomaliesUpdate,
   items,
   onAddLog,
   onPickupItem,
@@ -44,865 +55,426 @@ export default function MainGameView({
   onChapterComplete,
   onCaptureAnomaly,
 }: MainGameViewProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-
-  // Keyboard controls state
-  const keysPressed = useRef<{ [key: string]: boolean }>({});
-  const mousePos = useRef({ x: 0, y: 0 });
-
-  // Stale-safe refs for real-time calculations and zero-lag render loop
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const keysPressed = useRef<Record<string, boolean>>({});
+  const mousePos = useRef({ x: PIXEL_VIEW_WIDTH * 0.72, y: PIXEL_VIEW_HEIGHT * 0.52 });
   const playerRef = useRef(player);
   const itemsRef = useRef(items);
   const anomaliesRef = useRef(anomalies);
-  const onCaptureAnomalyRef = useRef(onCaptureAnomaly);
-  const handleInspectTriggerRef = useRef<() => void>(() => {});
-
-  useEffect(() => { playerRef.current = player; }, [player]);
-  useEffect(() => { itemsRef.current = items; }, [items]);
-  useEffect(() => { anomaliesRef.current = anomalies; }, [anomalies]);
-  useEffect(() => { onCaptureAnomalyRef.current = onCaptureAnomaly; }, [onCaptureAnomaly]);
-  const dustParticles = useRef<DustParticle[]>([]);
+  const chapterRef = useRef(currentChapterId);
+  const inspectRef = useRef<() => void>(() => undefined);
+  const captureRef = useRef(onCaptureAnomaly);
+  const scareTriggered = useRef<Record<number, boolean>>({});
   const [isFocused, setIsFocused] = useState(false);
 
   useEffect(() => {
-    // Attempt auto-focus on mount
-    containerRef.current?.focus();
-  }, []);
+    playerRef.current = player;
+  }, [player]);
 
-  // Trigger scare flags to avoid spamming
-  const scareTriggered = useRef<{ [pos: number]: boolean }>({});
-
-  // Initialize dust particles
   useEffect(() => {
-    const particles: DustParticle[] = [];
-    for (let i = 0; i < 40; i++) {
-      particles.push({
-        x: Math.random() * 800,
-        y: Math.random() * 300,
-        vx: (Math.random() - 0.5) * 0.4,
-        vy: (Math.random() - 0.5) * 0.4,
-        size: Math.random() * 2 + 1,
-        alpha: Math.random() * 0.5 + 0.2
-      });
+    itemsRef.current = items;
+  }, [items]);
+
+  useEffect(() => {
+    anomaliesRef.current = anomalies;
+  }, [anomalies]);
+
+  useEffect(() => {
+    chapterRef.current = currentChapterId;
+  }, [currentChapterId]);
+
+  useEffect(() => {
+    captureRef.current = onCaptureAnomaly;
+  }, [onCaptureAnomaly]);
+
+  const clearKeys = () => {
+    keysPressed.current = {};
+  };
+
+  const handleInspect = () => {
+    const currentX = playerRef.current.x;
+    const target = itemsRef.current.find((item) => {
+      if (item.found) return false;
+      const itemX = ITEM_WORLD_POSITIONS[item.id];
+      return itemX !== undefined && Math.abs(currentX - itemX) < 72;
+    });
+
+    if (target) {
+      onPickupItem(target.id);
+      return;
     }
-    dustParticles.current = particles;
-  }, []);
 
-  // Set up resize observer to keep canvas responsive
+    onAddLog('ここには記録できるものはない。');
+  };
+
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    inspectRef.current = handleInspect;
+  }, [items, onAddLog, onPickupItem, player.x]);
 
-    const handleResize = () => {
-      const container = containerRef.current;
-      if (!container) return;
-      canvas.width = container.clientWidth;
-      canvas.height = 360; // Fixed aesthetic height
-    };
-
-    handleResize();
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
-
-  // Monitor keyboard inputs
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (!e.key) return;
-      const key = e.key.toLowerCase();
-      keysPressed.current[key] = true;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (isTypingTarget(event.target)) return;
+      const key = event.key.toLowerCase();
+      setPressed(keysPressed, key, true);
 
-      // Prevent default scrolling for arrows and space
-      if (key === ' ' || key === 'arrowup' || key === 'arrowdown' || key === 'arrowleft' || key === 'arrowright') {
-        e.preventDefault();
+      if (
+        key === ' ' ||
+        key === 'arrowup' ||
+        key === 'arrowdown' ||
+        key === 'arrowleft' ||
+        key === 'arrowright'
+      ) {
+        event.preventDefault();
       }
 
-      // Flashlight switch hotkey [F]
+      if (event.repeat) return;
+
       if (key === 'f') {
-        setPlayer(prev => {
+        setPlayer((previous) => {
+          if (previous.battery <= 0 && !previous.flashlightOn) return previous;
           AudioSynth.playFlashlightClick();
-          return { ...prev, flashlightOn: !prev.flashlightOn };
+          const next = { ...previous, flashlightOn: !previous.flashlightOn };
+          playerRef.current = next;
+          return next;
         });
-      }
-
-      // Inspect hotkey [E]
-      if (key === 'e') {
-        handleInspectTriggerRef.current();
-      }
-
-      // Spectral Capture hotkey [SPACE]
-      if (key === ' ') {
-        onCaptureAnomalyRef.current();
+      } else if (key === 'e') {
+        inspectRef.current();
+      } else if (key === ' ') {
+        captureRef.current();
       }
     };
 
-    const handleKeyUp = (e: KeyboardEvent) => {
-      if (!e.key) return;
-      keysPressed.current[e.key.toLowerCase()] = false;
+    const handleKeyUp = (event: KeyboardEvent) => {
+      if (!event.key) return;
+      setPressed(keysPressed, event.key.toLowerCase(), false);
+    };
+
+    const handleVisibility = () => {
+      if (document.visibilityState !== 'visible') clearKeys();
     };
 
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('blur', clearKeys);
+    document.addEventListener('visibilitychange', handleVisibility);
 
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('blur', clearKeys);
+      document.removeEventListener('visibilitychange', handleVisibility);
     };
   }, [setPlayer]);
 
-  // Main Physics / Movement / Interaction loop
   useEffect(() => {
-    let animationId: number;
-    let footstepTimer = 0;
+    let animationId = 0;
+    let previousAt = performance.now();
+    let footstepDistance = 0;
 
-    const tick = () => {
-      const isA = keysPressed.current['a'] || keysPressed.current['arrowleft'];
-      const isD = keysPressed.current['d'] || keysPressed.current['arrowright'];
-      const isShift = keysPressed.current['shift'];
-      const isS = keysPressed.current['s'] || keysPressed.current['arrowdown'] || keysPressed.current['control'];
+    const tick = (now: number) => {
+      animationId = window.requestAnimationFrame(tick);
+      const elapsedMs = now - previousAt;
+      if (elapsedMs < 28) return;
+      const dt = Math.min(0.05, Math.max(0.001, elapsedMs / 1000));
+      previousAt = now;
 
-      // Adjust player movement state
-      let dx = 0;
-      let running = false;
-      let crouching = false;
+      const left = keysPressed.current.a || keysPressed.current.arrowleft;
+      const right = keysPressed.current.d || keysPressed.current.arrowright;
+      const run = Boolean(keysPressed.current.shift);
+      const crouch = Boolean(
+        keysPressed.current.s || keysPressed.current.arrowdown || keysPressed.current.control,
+      );
 
-      if (isS) {
-        crouching = true;
-      }
+      const current = playerRef.current;
+      const direction = left === right ? 0 : left ? -1 : 1;
+      const speed = crouch ? 48 : run ? 192 : 108;
+      const deltaX = direction * speed * dt;
+      const nextX = Math.max(0, Math.min(5000, current.x + deltaX));
+      const isRunning = direction !== 0 && run && !crouch;
+      const isCrouching = crouch;
 
-      if (isA) {
-        dx = crouching ? -0.8 : isShift ? -3.2 : -1.8;
-        running = isShift && !crouching;
-      } else if (isD) {
-        dx = crouching ? 0.8 : isShift ? 3.2 : 1.8;
-        running = isShift && !crouching;
-      }
-
-      // 1. Footstep sound pacing
-      if (dx !== 0) {
-        footstepTimer += 1;
-        const stepRate = running ? 15 : crouching ? 40 : 25;
-        if (footstepTimer % stepRate === 0) {
-          AudioSynth.playFootstep(running);
+      if (direction !== 0) {
+        footstepDistance += Math.abs(deltaX);
+        const stepLength = isRunning ? 28 : isCrouching ? 46 : 36;
+        if (footstepDistance >= stepLength) {
+          AudioSynth.playFootstep(isRunning);
+          footstepDistance = 0;
         }
       } else {
-        footstepTimer = 0;
+        footstepDistance = 0;
       }
 
-      // Read current values using playerRef to prevent stale closure bugs!
-      const currentVal = playerRef.current;
+      const drainPerSecond = current.flashlightOn
+        ? isRunning
+          ? 0.78
+          : isCrouching
+            ? 0.3
+            : 0.46
+        : 0;
+      const nextBattery = Math.max(0, current.battery - drainPerSecond * dt);
 
-      // 2. Battery drainage
-      let batDrain = 0.005;
-      if (running) batDrain = 0.012;
-      if (!currentVal.flashlightOn) batDrain = -0.001; 
+      let nearestDistance = Number.POSITIVE_INFINITY;
+      for (const anomaly of anomaliesRef.current) {
+        if (!anomaly.captured) {
+          nearestDistance = Math.min(nearestDistance, Math.abs(nextX - anomaly.x));
+        }
+      }
 
-      const nextX = Math.max(0, Math.min(5000, currentVal.x + dx));
-      // Max battery level is 100
-      const nextBat = Math.max(0, Math.min(100, currentVal.battery - (currentVal.flashlightOn ? batDrain * 8 : 0)));
+      let targetTension = 9;
+      if (nearestDistance < 640) {
+        targetTension = 9 + ((640 - nearestDistance) / 640) * 82;
+      }
+      if (!current.flashlightOn && nextX > 1100) targetTension = Math.min(100, targetTension * 1.48);
+      if (isRunning && nearestDistance < 420) targetTension = Math.min(100, targetTension + 7);
+      const nextTension = current.tension + (targetTension - current.tension) * Math.min(1, dt * 3.6);
+      AudioSynth.updateTension(nextTension);
 
-      // Handle Chapter Complete boundaries (safely outside of setPlayer)
-      if (nextX >= 1200 && currentChapterId === 1) onChapterComplete();
-      else if (nextX >= 2400 && currentChapterId === 2) onChapterComplete();
-      else if (nextX >= 3600 && currentChapterId === 3) onChapterComplete();
-      else if (nextX >= 4500 && currentChapterId === 4) onChapterComplete();
-      else if (nextX >= 4980 && currentChapterId === 5) onChapterComplete();
+      const next: PlayerState = {
+        ...current,
+        x: nextX,
+        isRunning,
+        isCrouching,
+        battery: nextBattery,
+        tension: nextTension,
+      };
 
-      // 3. Spooky triggers / Scares as player walks past certain marks (safely outside of setPlayer)
+      playerRef.current = next;
+      setPlayer(next);
+
+      const chapter = chapterRef.current;
+      if (nextX >= 1200 && chapter === 1) onChapterComplete();
+      else if (nextX >= 2400 && chapter === 2) onChapterComplete();
+      else if (nextX >= 3600 && chapter === 3) onChapterComplete();
+      else if (nextX >= 4500 && chapter === 4) onChapterComplete();
+      else if (nextX >= 4980 && chapter === 5) onChapterComplete();
+
       if (nextX > 500 && !scareTriggered.current[500]) {
         scareTriggered.current[500] = true;
         onTriggerScare('whisper');
-        onAddLog("カサカサ… 奥の物陰から物音がした。");
+        onAddLog('左の病室から、配信者と同じ呼吸音が返ってきた。');
       }
       if (nextX > 1600 && !scareTriggered.current[1600]) {
         scareTriggered.current[1600] = true;
         onTriggerScare('jumpscare');
-        onAddLog("バタン！ 右上カメラが激しくノイズを起こす！");
+        onAddLog('PIP映像だけが一瞬停止した。停止した画面では誰かが近づいている。');
       }
       if (nextX > 3800 && !scareTriggered.current[3800]) {
         scareTriggered.current[3800] = true;
         onTriggerScare('chase');
-        onAddLog("何かが背後から走ってくる！ 立ち止まるな！");
+        onAddLog('背後の足音が二歩ぶん増えた。立ち止まるな。');
       }
-
-      // 4. Calculate near entity proximity tension
-      let nearAnomalyDist = 9999;
-      anomaliesRef.current.forEach(a => {
-        if (!a.captured) {
-          const dist = Math.abs(nextX - a.x);
-          if (dist < nearAnomalyDist) nearAnomalyDist = dist;
-        }
-      });
-
-      let targetTension = 10;
-      if (nearAnomalyDist < 600) {
-        targetTension = 10 + ((600 - nearAnomalyDist) / 600) * 80;
-      }
-      // Double tension if flashlight is off in a dangerous zone
-      if (!currentVal.flashlightOn && nextX > 1200) {
-        targetTension = Math.min(100, targetTension * 1.5);
-      }
-
-      const smoothedTension = currentVal.tension + (targetTension - currentVal.tension) * 0.05;
-      AudioSynth.updateTension(smoothedTension);
-
-      // Now set state with pre-calculated, side-effect-free values!
-      setPlayer({
-        ...currentVal,
-        x: nextX,
-        isRunning: running,
-        isCrouching: crouching,
-        battery: nextBat,
-        tension: smoothedTension,
-      });
-
-      animationId = requestAnimationFrame(tick);
     };
 
-    animationId = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(animationId);
-  }, [setPlayer, currentChapterId, onChapterComplete, onTriggerScare, onAddLog]);
+    animationId = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(animationId);
+  }, [onAddLog, onChapterComplete, onTriggerScare, setPlayer]);
 
-  // Canvas Painter Loop
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d', { alpha: false });
     if (!ctx) return;
 
-    let animId: number;
+    let animationId = 0;
+    let previousFrame = 0;
 
-    const render = () => {
-      const w = canvas.width;
-      const h = canvas.height;
+    const render = (now: number) => {
+      animationId = window.requestAnimationFrame(render);
+      if (now - previousFrame < 32) return;
+      previousFrame = now;
+      const moving = Boolean(
+        keysPressed.current.a ||
+          keysPressed.current.arrowleft ||
+          keysPressed.current.d ||
+          keysPressed.current.arrowright,
+      );
 
-      // Clear Screen
-      ctx.fillStyle = '#050505';
-      ctx.fillRect(0, 0, w, h);
-
-      const playerVal = playerRef.current;
-      const anomaliesVal = anomaliesRef.current;
-      const itemsVal = itemsRef.current;
-
-      // Camera view offset: Player is centered on screen, background scrolls
-      const viewX = playerVal.x - w / 2;
-
-      // 1. Draw floor lines and wall borders (rusty concrete tile styling)
-      ctx.fillStyle = '#111113'; 
-      ctx.fillRect(0, h - 80, w, 80);
-
-      ctx.fillStyle = '#0a0a0c'; 
-      ctx.fillRect(0, h - 88, w, 8);
-
-      // Rusty tiles lines
-      ctx.strokeStyle = '#050507';
-      ctx.lineWidth = 1;
-      for (let xOffset = -viewX % 120; xOffset < w; xOffset += 120) {
-        ctx.beginPath();
-        ctx.moveTo(xOffset, h - 80);
-        ctx.lineTo(xOffset - 40, h);
-        ctx.stroke();
-      }
-
-      // Draw structural pillars and doors
-      ctx.fillStyle = '#0a0a0d'; 
-      ctx.fillRect(0, 0, w, 50);
-
-      // Draw rusty pipes on top wall
-      ctx.strokeStyle = '#1e1111';
-      ctx.lineWidth = 4;
-      ctx.beginPath();
-      ctx.moveTo(0, 60);
-      ctx.lineTo(w, 60);
-      ctx.stroke();
-
-      // Pipes brackets
-      ctx.fillStyle = '#2d1414';
-      for (let xOffset = -viewX % 200; xOffset < w; xOffset += 200) {
-        ctx.fillRect(xOffset, 55, 6, 12);
-      }
-
-      // Draw static assets
-      const drawAssets = () => {
-        drawFence(150);
-        drawDoor(1200, "第一病棟 A-3");
-        drawDoor(2400, "診察室 入口");
-        drawDoor(3600, "地下電波管理室");
-        drawDoor(4500, "最奥祭壇");
-        drawEmergencyExit(4980);
-
-        drawLocker(400, false);
-        drawBloodyWriting(700, "ハシレ");
-        drawWheelchair(850);
-        drawBloodyWriting(1450, "右上ヲ見ロ");
-        drawLocker(1600, true); 
-        drawGurney(2050);
-        drawBloodyWriting(2700, "ミツケタ");
-        drawCrackedMirror(3100);
-        drawGraffiti(3850, "† DEATH ZONE †");
-        drawAltar(4750);
-      };
-
-      const drawFence = (posX: number) => {
-        const screenX = posX - viewX;
-        ctx.strokeStyle = '#22222b';
-        ctx.lineWidth = 3;
-        for (let ix = screenX - 10; ix < screenX + 15; ix += 8) {
-          ctx.beginPath();
-          ctx.moveTo(ix, 50);
-          ctx.lineTo(ix, h - 80);
-          ctx.stroke();
-        }
-        ctx.fillStyle = '#111116';
-        ctx.fillRect(screenX - 15, h - 140, 30, 10);
-      };
-
-      const drawDoor = (posX: number, label: string) => {
-        const screenX = posX - viewX;
-        ctx.fillStyle = '#170f0f';
-        ctx.fillRect(screenX - 45, 80, 90, h - 168);
-        ctx.strokeStyle = '#050505';
-        ctx.lineWidth = 3;
-        ctx.strokeRect(screenX - 45, 80, 90, h - 168);
-        ctx.fillStyle = '#2e1212';
-        ctx.fillRect(screenX - 38, 85, 76, h - 173);
-        ctx.fillStyle = '#050505';
-        ctx.fillRect(screenX - 25, 100, 50, 15);
-        ctx.fillStyle = '#857373';
-        ctx.font = '7px monospace';
-        ctx.textAlign = 'center';
-        ctx.fillText(label, screenX, 110);
-        ctx.fillStyle = '#a1831f';
-        ctx.beginPath();
-        ctx.arc(screenX + 28, h - 120, 4, 0, Math.PI * 2);
-        ctx.fill();
-      };
-
-      const drawEmergencyExit = (posX: number) => {
-        const screenX = posX - viewX;
-        ctx.fillStyle = '#043425';
-        ctx.fillRect(screenX - 50, 60, 100, h - 140);
-        ctx.strokeStyle = '#044e39';
-        ctx.lineWidth = 4;
-        ctx.strokeRect(screenX - 50, 60, 100, h - 140);
-        ctx.fillStyle = '#059669';
-        ctx.fillRect(screenX - 25, 75, 50, 20);
-        ctx.fillStyle = '#011c15';
-        ctx.font = 'bold 9px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText("EXIT 非常口", screenX, 88);
-      };
-
-      const drawLocker = (posX: number, isOpen: boolean) => {
-        const screenX = posX - viewX;
-        ctx.fillStyle = '#1b1d21';
-        ctx.fillRect(screenX - 20, 90, 40, h - 170);
-        ctx.strokeStyle = '#0d0e10';
-        ctx.lineWidth = 2;
-        ctx.strokeRect(screenX - 20, 90, 40, h - 170);
-        ctx.fillStyle = '#0a0a0c';
-        ctx.fillRect(screenX - 12, 100, 24, 4);
-        ctx.fillRect(screenX - 12, 110, 24, 4);
-        
-        if (isOpen) {
-          ctx.fillStyle = '#050505';
-          ctx.fillRect(screenX - 20, 90, 40, h - 170);
-          ctx.fillStyle = '#14161a';
-          ctx.fillRect(screenX - 45, 90, 25, h - 170); 
-          ctx.fillStyle = '#dc2626';
-          ctx.beginPath();
-          ctx.arc(screenX - 5, h - 180, 2, 0, Math.PI * 2);
-          ctx.arc(screenX + 5, h - 180, 2, 0, Math.PI * 2);
-          ctx.fill();
-        }
-      };
-
-      const drawBloodyWriting = (posX: number, text: string) => {
-        const screenX = posX - viewX;
-        ctx.fillStyle = 'rgba(153, 27, 27, 0.7)';
-        ctx.font = 'bold 24px monospace';
-        ctx.textAlign = 'center';
-        ctx.fillText(text, screenX, 150);
-      };
-
-      const drawGraffiti = (posX: number, text: string) => {
-        const screenX = posX - viewX;
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
-        ctx.font = '14px monospace';
-        ctx.textAlign = 'center';
-        ctx.fillText(text, screenX, 120);
-      };
-
-      const drawWheelchair = (posX: number) => {
-        const screenX = posX - viewX;
-        ctx.strokeStyle = '#27272a';
-        ctx.lineWidth = 3;
-        ctx.beginPath();
-        ctx.moveTo(screenX - 10, h - 140);
-        ctx.lineTo(screenX - 10, h - 100);
-        ctx.lineTo(screenX + 15, h - 100);
-        ctx.stroke();
-        ctx.fillStyle = '#18181b';
-        ctx.strokeStyle = '#3f3f46';
-        ctx.beginPath();
-        ctx.arc(screenX + 2, h - 94, 14, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
-      };
-
-      const drawGurney = (posX: number) => {
-        const screenX = posX - viewX;
-        ctx.fillStyle = '#2d3748';
-        ctx.fillRect(screenX - 35, h - 110, 70, 10); 
-        ctx.strokeStyle = '#718096';
-        ctx.lineWidth = 3;
-        ctx.beginPath();
-        ctx.moveTo(screenX - 25, h - 100); ctx.lineTo(screenX - 20, h - 80);
-        ctx.moveTo(screenX + 25, h - 100); ctx.lineTo(screenX + 20, h - 80);
-        ctx.stroke();
-        ctx.fillStyle = 'rgba(127, 29, 29, 0.85)';
-        ctx.fillRect(screenX - 10, h - 110, 25, 4);
-      };
-
-      const drawCrackedMirror = (posX: number) => {
-        const screenX = posX - viewX;
-        ctx.fillStyle = '#451a03';
-        ctx.fillRect(screenX - 25, 90, 50, 90);
-        ctx.fillStyle = '#0891b2';
-        ctx.fillRect(screenX - 20, 95, 40, 80);
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(screenX - 10, 95); ctx.lineTo(screenX + 5, 140);
-        ctx.lineTo(screenX - 15, 160);
-        ctx.moveTo(screenX + 10, 110); ctx.lineTo(screenX - 5, 140);
-        ctx.stroke();
-      };
-
-      const drawAltar = (posX: number) => {
-        const screenX = posX - viewX;
-        ctx.fillStyle = '#0c0a09';
-        ctx.fillRect(screenX - 35, h - 130, 70, 50);
-        ctx.strokeStyle = '#1c1917';
-        ctx.lineWidth = 2;
-        ctx.strokeRect(screenX - 35, h - 130, 70, 50);
-        ctx.fillStyle = '#d97706';
-        ctx.fillRect(screenX - 20, h - 120, 8, 20);
-        ctx.fillRect(screenX + 10, h - 120, 8, 20);
-        ctx.fillStyle = '#cbd5e1';
-        ctx.beginPath();
-        ctx.arc(screenX, h - 138, 8, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = '#7f1d1d';
-        ctx.fillRect(screenX - 30, h - 140, 4, 10);
-        ctx.fillRect(screenX + 26, h - 140, 4, 10);
-        ctx.fillStyle = '#ea580c';
-        ctx.beginPath();
-        ctx.arc(screenX - 28, h - 143, 2, 0, Math.PI * 2);
-        ctx.arc(screenX + 28, h - 143, 2, 0, Math.PI * 2);
-        ctx.fill();
-      };
-
-      drawAssets();
-
-      // 3. Draw capturable anomalies if visible in 2D
-      anomaliesVal.forEach(anomaly => {
-        if (!anomaly.captured && !anomaly.visibleOnlyInPip) {
-          const screenX = anomaly.x - viewX;
-          const y = h - 130 + (anomaly.yOffset || 0);
-
-          ctx.save();
-          if (anomaly.type === 'writing') {
-            ctx.fillStyle = 'rgba(127, 29, 29, 0.95)';
-            ctx.font = 'bold 22px "M PLUS 1p", Courier New, monospace';
-            ctx.textAlign = 'center';
-            ctx.fillText("助　ケ　テ", screenX, y + 20);
-          } else if (anomaly.type === 'orb') {
-            const pulse = 10 + Math.sin(Date.now() / 120) * 4;
-            const grad = ctx.createRadialGradient(screenX, y, 1, screenX, y, pulse);
-            grad.addColorStop(0, 'rgba(255, 255, 255, 0.95)');
-            grad.addColorStop(0.3, 'rgba(6, 182, 212, 0.7)');
-            grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
-            ctx.fillStyle = grad;
-            ctx.beginPath();
-            ctx.arc(screenX, y, pulse, 0, Math.PI * 2);
-            ctx.fill();
-          } else if (anomaly.type === 'doll') {
-            ctx.fillStyle = '#581c87';
-            ctx.fillRect(screenX - 8, y + 10, 16, 25);
-            ctx.fillStyle = '#fbcfe8';
-            ctx.beginPath();
-            ctx.arc(screenX, y + 5, 8, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.fillStyle = '#000000';
-            ctx.beginPath();
-            ctx.arc(screenX - 3, y + 5, 1.5, 0, Math.PI * 2);
-            ctx.arc(screenX + 3, y + 5, 1.5, 0, Math.PI * 2);
-            ctx.fill();
-          }
-          ctx.restore();
-        }
+      renderPixelScene({
+        ctx,
+        player: playerRef.current,
+        anomalies: anomaliesRef.current,
+        items: itemsRef.current,
+        mouse: mousePos.current,
+        now,
+        isMoving: moving,
       });
-
-      // 4. Draw interactive Items
-      itemsVal.forEach(item => {
-        if (!item.found) {
-          let itemX = 0;
-          if (item.id === 'KEYCARD_BLUE') itemX = 1450;
-          else if (item.id === 'DIARY_1') itemX = 800;
-          else if (item.id === 'DIARY_2') itemX = 3100;
-          else if (item.id === 'PHOTO_OLD') itemX = 4750;
-
-          const screenX = itemX - viewX;
-          const isNearby = Math.abs(playerVal.x - itemX) < 60;
-
-          ctx.save();
-          const bounceY = h - 100 + Math.sin(Date.now() / 150) * 4;
-          const pulse = 12 + Math.sin(Date.now() / 100) * 3;
-          const glow = ctx.createRadialGradient(screenX, bounceY, 1, screenX, bounceY, pulse);
-          glow.addColorStop(0, 'rgba(217, 119, 6, 0.85)');
-          glow.addColorStop(1, 'rgba(0, 0, 0, 0)');
-          ctx.fillStyle = glow;
-          ctx.beginPath();
-          ctx.arc(screenX, bounceY, pulse, 0, Math.PI * 2);
-          ctx.fill();
-
-          ctx.fillStyle = '#d97706';
-          ctx.strokeStyle = '#ffffff';
-          ctx.lineWidth = 1;
-          if (item.type === 'keycard') {
-            ctx.fillRect(screenX - 6, bounceY - 4, 12, 8);
-            ctx.strokeRect(screenX - 6, bounceY - 4, 12, 8);
-          } else {
-            ctx.fillRect(screenX - 5, bounceY - 6, 10, 12);
-            ctx.strokeRect(screenX - 5, bounceY - 6, 10, 12);
-          }
-
-          if (isNearby) {
-            ctx.fillStyle = 'rgba(5, 5, 5, 0.95)';
-            ctx.fillRect(screenX - 25, bounceY - 30, 50, 16);
-            ctx.strokeStyle = '#d97706';
-            ctx.strokeRect(screenX - 25, bounceY - 30, 50, 16);
-
-            ctx.fillStyle = '#ffffff';
-            ctx.font = '9px monospace';
-            ctx.textAlign = 'center';
-            ctx.fillText("[E] 調べる", screenX, bounceY - 19);
-          }
-          ctx.restore();
-        }
-      });
-
-      // 5. Darkness & Flashlight Cone Mask
-      const playerScreenX = w / 2; 
-      const playerScreenY = h - 130 + (playerVal.isCrouching ? 20 : 0);
-
-      ctx.save();
-      ctx.fillStyle = 'rgba(2, 2, 3, 0.98)';
-      ctx.fillRect(0, 0, w, h);
-
-      if (playerVal.flashlightOn && playerVal.battery > 0) {
-        ctx.globalCompositeOperation = 'destination-out';
-
-        const startX = playerScreenX;
-        const startY = playerScreenY - 10;
-        
-        const dx = mousePos.current.x - startX;
-        const dy = mousePos.current.y - startY;
-        const angle = Math.atan2(dy, dx);
-
-        const range = 240 + Math.sin(Date.now() / 50) * 3; 
-        const beamWidth = 0.35; 
-
-        ctx.beginPath();
-        ctx.moveTo(startX, startY);
-        ctx.arc(startX, startY, range, angle - beamWidth, angle + beamWidth);
-        ctx.closePath();
-        ctx.fillStyle = 'rgba(255, 255, 255, 1)';
-        ctx.fill();
-
-        const beamGlow = ctx.createRadialGradient(startX, startY, 20, startX, startY, range);
-        beamGlow.addColorStop(0, 'rgba(255, 255, 255, 1)');
-        beamGlow.addColorStop(0.6, 'rgba(255, 255, 255, 0.85)');
-        beamGlow.addColorStop(0.9, 'rgba(255, 255, 255, 0.15)');
-        beamGlow.addColorStop(1, 'rgba(255, 255, 255, 0)');
-        
-        ctx.globalCompositeOperation = 'destination-out';
-        ctx.beginPath();
-        ctx.arc(startX, startY, range, 0, Math.PI * 2);
-        ctx.fillStyle = beamGlow;
-        ctx.fill();
-      }
-      ctx.restore();
-
-      // 6. Dust particles spark list
-      if (playerVal.flashlightOn && playerVal.battery > 0) {
-        ctx.save();
-        const startX = playerScreenX;
-        const startY = playerScreenY - 10;
-        const dx = mousePos.current.x - startX;
-        const dy = mousePos.current.y - startY;
-        const angle = Math.atan2(dy, dx);
-
-        dustParticles.current.forEach(p => {
-          p.x += p.vx;
-          p.y += p.vy;
-          if (p.x < 0) p.x = w;
-          if (p.x > w) p.x = 0;
-          if (p.y < 0) p.y = h;
-          if (p.y > h) p.y = 0;
-
-          const pdx = p.x - startX;
-          const pdy = p.y - startY;
-          const pAngle = Math.atan2(pdy, pdx);
-          const pDist = Math.sqrt(pdx*pdx + pdy*pdy);
-
-          let diffAngle = pAngle - angle;
-          while (diffAngle < -Math.PI) diffAngle += Math.PI * 2;
-          while (diffAngle > Math.PI) diffAngle -= Math.PI * 2;
-
-          const insideBeam = Math.abs(diffAngle) < 0.42 && pDist < 250;
-
-          if (insideBeam) {
-            ctx.fillStyle = `rgba(255, 252, 224, ${p.alpha * (1 - pDist/250) * 1.5})`;
-            ctx.beginPath();
-            ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-            ctx.fill();
-          }
-        });
-        ctx.restore();
-      }
-
-      // 7. Render Streamer Character
-      ctx.save();
-      const faceDirection = mousePos.current.x >= playerScreenX ? 1 : -1;
-
-      ctx.translate(playerScreenX, playerScreenY);
-      ctx.scale(faceDirection, 1);
-
-      const isMoving = keysPressed.current['a'] || keysPressed.current['arrowleft'] || keysPressed.current['d'] || keysPressed.current['arrowright'];
-      const walkCycle = playerVal.isRunning ? (Date.now() / 70) : (isMoving ? (Date.now() / 120) : 0);
-      const walkBounceY = Math.abs(Math.sin(walkCycle)) * 4;
-
-      ctx.strokeStyle = '#050505';
-      ctx.lineWidth = 4;
-      ctx.lineCap = 'round';
-      
-      const leftLegSwing = Math.sin(walkCycle) * 12;
-      const rightLegSwing = -Math.sin(walkCycle) * 12;
-      
-      ctx.beginPath();
-      ctx.moveTo(-6, 25);
-      ctx.lineTo(-6 + leftLegSwing, 45 - walkBounceY);
-      ctx.stroke();
-
-      ctx.beginPath();
-      ctx.moveTo(6, 25);
-      ctx.lineTo(6 + rightLegSwing, 45 - walkBounceY);
-      ctx.stroke();
-
-      ctx.fillStyle = '#9f1239'; 
-      ctx.fillRect(-12, -15 - walkBounceY, 24, 40);
-      
-      ctx.strokeStyle = '#000000';
-      ctx.lineWidth = 2;
-      ctx.strokeRect(-12, -15 - walkBounceY, 24, 40);
-
-      ctx.fillStyle = '#d97706';
-      ctx.fillRect(-18, -10 - walkBounceY, 7, 28);
-      ctx.strokeRect(-18, -10 - walkBounceY, 7, 28);
-
-      ctx.fillStyle = '#881337'; 
-      ctx.beginPath();
-      ctx.arc(0, -25 - walkBounceY, 15, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-
-      ctx.fillStyle = '#0f0f12';
-      ctx.beginPath();
-      ctx.arc(5, -25 - walkBounceY, 10, 0, Math.PI * 2);
-      ctx.fill();
-
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(4, -28 - walkBounceY, 4, 3);
-      ctx.fillRect(10, -28 - walkBounceY, 2, 3);
-
-      ctx.fillStyle = '#1e293b';
-      ctx.fillRect(8, -5 - walkBounceY, 14, 8);
-      ctx.strokeRect(8, -5 - walkBounceY, 14, 8);
-      ctx.fillStyle = '#ef4444';
-      ctx.beginPath();
-      ctx.arc(20, -1 - walkBounceY, 1.5, 0, Math.PI * 2);
-      ctx.fill();
-
-      ctx.fillStyle = '#64748b';
-      ctx.fillRect(8, 8 - walkBounceY, 10, 5);
-      ctx.fillStyle = '#cbd5e1';
-      ctx.fillRect(16, 7 - walkBounceY, 3, 7);
-
-      ctx.restore();
-
-      animId = requestAnimationFrame(render);
     };
 
-    render();
-
-    return () => {
-      cancelAnimationFrame(animId);
-    };
+    animationId = window.requestAnimationFrame(render);
+    return () => window.cancelAnimationFrame(animationId);
   }, []);
 
-  const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+  const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-
     const rect = canvas.getBoundingClientRect();
     mousePos.current = {
-      x: e.clientX - rect.left,
-      y: e.clientY - rect.top
+      x: ((event.clientX - rect.left) / rect.width) * PIXEL_VIEW_WIDTH,
+      y: ((event.clientY - rect.top) / rect.height) * PIXEL_VIEW_HEIGHT,
     };
   };
 
-  const handleInspectTrigger = () => {
-    let nearbyItem: GameItem | null = null;
-
-    items.forEach(item => {
-      if (!item.found) {
-        let ix = 0;
-        if (item.id === 'KEYCARD_BLUE') ix = 1450;
-        else if (item.id === 'DIARY_1') ix = 800;
-        else if (item.id === 'DIARY_2') ix = 3100;
-        else if (item.id === 'PHOTO_OLD') ix = 4750;
-
-        if (Math.abs(player.x - ix) < 70) {
-          nearbyItem = item;
-        }
-      }
-    });
-
-    if (nearbyItem) {
-      onPickupItem((nearbyItem as GameItem).id);
-    } else {
-      onAddLog("ここには調べるべきものはない。");
-    }
+  const holdKey = (key: string, value: boolean) => (event: React.PointerEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setPressed(keysPressed, key, value);
+    if (value) event.currentTarget.setPointerCapture?.(event.pointerId);
   };
 
-  useEffect(() => {
-    handleInspectTriggerRef.current = handleInspectTrigger;
-  }, [items, player.x, onPickupItem, onAddLog]);
+  const toggleFlashlight = (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setPlayer((previous) => {
+      if (previous.battery <= 0 && !previous.flashlightOn) return previous;
+      AudioSynth.playFlashlightClick();
+      const next = { ...previous, flashlightOn: !previous.flashlightOn };
+      playerRef.current = next;
+      return next;
+    });
+  };
 
   return (
-    <div 
+    <section
       id="main-game-viewport"
       ref={containerRef}
-      onMouseMove={handleMouseMove}
       tabIndex={0}
       onFocus={() => setIsFocused(true)}
-      onBlur={() => setIsFocused(false)}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+          setIsFocused(false);
+          clearKeys();
+        }
+      }}
       onClick={() => containerRef.current?.focus()}
-      className="bg-black border-2 border-white/10 focus:border-red-500/50 rounded-lg overflow-hidden shadow-[0_30px_70px_rgba(0,0,0,0.95)] relative w-full flex flex-col group cursor-crosshair select-none outline-none"
+      onPointerMove={handlePointerMove}
+      className="screen-frame relative isolate w-full overflow-hidden border border-white/10 bg-black outline-none transition-colors focus:border-stone-500/55"
+      aria-label="廃病院探索画面"
     >
-      {/* Realtime HTML5 Canvas */}
-      <canvas 
+      <canvas
         ref={canvasRef}
-        className="w-full h-[360px] block"
+        width={PIXEL_VIEW_WIDTH}
+        height={PIXEL_VIEW_HEIGHT}
+        className="pixel-canvas block aspect-[64/30] w-full bg-black"
       />
 
-      <div className="absolute inset-0 crt-scanlines opacity-15 pointer-events-none" />
+      <div className="pointer-events-none absolute inset-0 crt-scanlines opacity-[0.18]" />
+      <div className="pointer-events-none absolute inset-0 pixel-screen-vignette" />
 
-      {/* Atmospheric Focus Cover */}
+      <div className="pointer-events-none absolute left-3 top-3 flex items-center gap-2 border border-white/10 bg-black/72 px-2 py-1 font-mono text-[8px] uppercase tracking-[0.15em] text-zinc-500">
+        <span className="h-1.5 w-1.5 bg-red-700" />
+        player feed / ch-{currentChapterId.toString().padStart(2, '0')}
+      </div>
+
+      <div className="pointer-events-none absolute right-3 top-3 border border-white/10 bg-black/72 px-2 py-1 font-mono text-[8px] uppercase tracking-[0.12em] text-zinc-600">
+        pos {Math.round(player.x).toString().padStart(4, '0')} / 5000
+      </div>
+
       {!isFocused && (
-        <div className="absolute inset-0 bg-[#050507]/90 backdrop-blur-sm flex flex-col items-center justify-center z-30 cursor-pointer text-center p-6 border border-white/5 transition-all duration-300">
-          <div className="w-16 h-16 rounded-full bg-red-950/40 border border-red-500/40 flex items-center justify-center animate-pulse mb-4">
-            <div className="w-4 h-4 rounded-full bg-red-600" />
+        <div className="absolute inset-0 z-30 flex cursor-pointer flex-col items-center justify-center bg-black/76 px-6 text-center backdrop-blur-[1px]">
+          <div className="mb-4 h-9 w-9 border border-stone-500/50 p-2">
+            <div className="h-full w-full bg-red-800/70" />
           </div>
-          <span className="text-red-500 font-mono font-black tracking-[0.2em] text-sm md:text-base uppercase">
-            CLICK TO START STREAMING
-          </span>
-          <p className="text-zinc-500 text-[11px] mt-2 max-w-sm leading-relaxed font-sans font-light">
-            クリックしてコントロールを有効化し、お化け屋敷の探索・ライブ配信を開始してください。
+          <p className="font-serif text-base font-semibold tracking-[0.12em] text-zinc-200">
+            画面をクリックして操作を有効化
+          </p>
+          <p className="mt-2 max-w-sm text-[10px] leading-5 text-zinc-600">
+            カーソルで懐中電灯を向け、A / Dで廊下を探索します。
           </p>
         </div>
       )}
 
-      {/* Guide & Controls Overlay with immersive design matching the design spec */}
-      <div className="absolute top-4 left-4 p-3 bg-black/60 backdrop-blur-md border border-white/10 rounded-md flex flex-col gap-1.5 pointer-events-auto">
-        <div className="flex items-center gap-2 text-[10px] text-zinc-300 font-mono tracking-wider">
-          <ArrowLeftRight className="w-3.5 h-3.5 text-red-500 animate-pulse" />
-          <span>[A/D] or [←/→] to Walk</span>
+      <div className="pointer-events-none absolute bottom-3 left-3 hidden items-end gap-1.5 md:flex">
+        {[
+          ['A / D', '移動'],
+          ['SHIFT', '走る'],
+          ['F', '灯り'],
+          ['E', '調査'],
+          ['SPACE', '撮影'],
+        ].map(([key, label]) => (
+          <div key={key} className="border border-white/10 bg-black/68 px-2 py-1 font-mono text-[7px] uppercase tracking-[0.08em] text-zinc-600">
+            <span className="text-zinc-300">{key}</span> {label}
+          </div>
+        ))}
+      </div>
+
+      <div className="absolute inset-x-3 bottom-3 z-20 flex items-end justify-between md:hidden">
+        <div className="flex gap-2">
+          <button
+            type="button"
+            aria-label="左へ移動"
+            onPointerDown={holdKey('arrowleft', true)}
+            onPointerUp={holdKey('arrowleft', false)}
+            onPointerCancel={holdKey('arrowleft', false)}
+            onPointerLeave={holdKey('arrowleft', false)}
+            className="flex h-11 w-11 items-center justify-center border border-white/16 bg-black/76 text-zinc-300 active:bg-zinc-800"
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            aria-label="右へ移動"
+            onPointerDown={holdKey('arrowright', true)}
+            onPointerUp={holdKey('arrowright', false)}
+            onPointerCancel={holdKey('arrowright', false)}
+            onPointerLeave={holdKey('arrowright', false)}
+            className="flex h-11 w-11 items-center justify-center border border-white/16 bg-black/76 text-zinc-300 active:bg-zinc-800"
+          >
+            <ArrowRight className="h-4 w-4" />
+          </button>
         </div>
-        <div className="flex items-center gap-2 text-[10px] text-zinc-400 font-mono">
-          <span className="bg-white/10 text-white font-black px-1.5 py-0.5 rounded text-[8px] border border-white/5">SHIFT</span>
-          <span>to Run</span>
-        </div>
-        <div className="flex items-center gap-2 text-[10px] text-zinc-400 font-mono">
-          <span className="bg-white/10 text-white font-black px-1.5 py-0.5 rounded text-[8px] border border-white/5">F</span>
-          <span>Toggle Light</span>
-        </div>
-        <div className="flex items-center gap-2 text-[10px] text-zinc-400 font-mono">
-          <span className="bg-white/10 text-white font-black px-1.5 py-0.5 rounded text-[8px] border border-white/5">SPACE</span>
-          <span>Capture Anomaly</span>
+
+        <div className="flex gap-1.5">
+          <button
+            type="button"
+            onPointerDown={holdKey('shift', true)}
+            onPointerUp={holdKey('shift', false)}
+            onPointerCancel={holdKey('shift', false)}
+            onPointerLeave={holdKey('shift', false)}
+            className="flex h-10 min-w-10 items-center justify-center border border-white/12 bg-black/76 px-2 text-zinc-400 active:text-white"
+            aria-label="走る"
+          >
+            <Zap className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={toggleFlashlight}
+            className="flex h-10 min-w-10 items-center justify-center border border-white/12 bg-black/76 px-2 text-zinc-400 active:text-white"
+            aria-label="懐中電灯を切り替える"
+          >
+            <Flashlight className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              handleInspect();
+            }}
+            className="flex h-10 min-w-10 items-center justify-center border border-white/12 bg-black/76 px-2 text-zinc-400 active:text-white"
+            aria-label="調べる"
+          >
+            <Search className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              captureRef.current();
+            }}
+            className="flex h-10 min-w-10 items-center justify-center border border-red-900/50 bg-red-950/50 px-2 text-red-300 active:bg-red-900/70"
+            aria-label="撮影する"
+          >
+            <Camera className="h-3.5 w-3.5" />
+          </button>
         </div>
       </div>
 
-      {/* Interactive Mobile On-screen Controls Overlay with glowing futuristic game pads */}
-      <div className="absolute bottom-4 right-4 left-4 flex justify-between items-center pointer-events-none">
-        {/* Left: Joystick keys */}
-        <div className="flex gap-2.5">
-          <button
-            onTouchStart={() => { keysPressed.current['arrowleft'] = true; }}
-            onTouchEnd={() => { keysPressed.current['arrowleft'] = false; }}
-            onMouseDown={() => { keysPressed.current['arrowleft'] = true; }}
-            onMouseUp={() => { keysPressed.current['arrowleft'] = false; }}
-            onMouseLeave={() => { keysPressed.current['arrowleft'] = false; }}
-            className="w-12 h-12 rounded-full bg-black/60 border border-white/10 hover:border-white/20 text-white font-black hover:bg-black/80 active:scale-90 flex items-center justify-center text-sm transition-all pointer-events-auto cursor-pointer shadow-xl backdrop-blur-sm"
-          >
-            ◀
-          </button>
-          <button
-            onTouchStart={() => { keysPressed.current['arrowright'] = true; }}
-            onTouchEnd={() => { keysPressed.current['arrowright'] = false; }}
-            onMouseDown={() => { keysPressed.current['arrowright'] = true; }}
-            onMouseUp={() => { keysPressed.current['arrowright'] = false; }}
-            onMouseLeave={() => { keysPressed.current['arrowright'] = false; }}
-            className="w-12 h-12 rounded-full bg-black/60 border border-white/10 hover:border-white/20 text-white font-black hover:bg-black/80 active:scale-90 flex items-center justify-center text-sm transition-all pointer-events-auto cursor-pointer shadow-xl backdrop-blur-sm"
-          >
-            ▶
-          </button>
-        </div>
-
-        {/* Right: Action Buttons */}
-        <div className="flex gap-2 pointer-events-auto">
-          {/* Run Toggle */}
-          <button
-            onTouchStart={() => { keysPressed.current['shift'] = true; }}
-            onTouchEnd={() => { keysPressed.current['shift'] = false; }}
-            onMouseDown={() => { keysPressed.current['shift'] = true; }}
-            onMouseUp={() => { keysPressed.current['shift'] = false; }}
-            onMouseLeave={() => { keysPressed.current['shift'] = false; }}
-            className="px-4 py-2.5 rounded-md bg-red-950/65 hover:bg-red-900 border border-red-700/60 text-white font-mono text-[10px] font-bold tracking-wider hover:border-red-600 active:scale-95 transition-all cursor-pointer shadow-lg shadow-red-950/40"
-          >
-            RUN [SHIFT]
-          </button>
-
-          {/* Inspect Button */}
-          <button
-            onClick={handleInspectTrigger}
-            className="px-4 py-2.5 rounded-md bg-[#0c0a09]/80 hover:bg-[#1c1917] border border-white/10 text-amber-500 font-mono text-[10px] font-bold tracking-wider hover:border-white/20 active:scale-95 transition-all cursor-pointer shadow-lg"
-          >
-            INSPECT [E]
-          </button>
-        </div>
-      </div>
-
-      {/* Screen Damage Vignette Red Border */}
-      {player.tension > 70 && (
-        <div 
-          className="absolute inset-0 border-4 border-red-600/40 pointer-events-none transition-all duration-300 animate-pulse shadow-[inset_0_0_60px_rgba(220,38,38,0.6)]" 
-          style={{ opacity: (player.tension - 70) / 30 }}
+      {player.tension > 72 && (
+        <div
+          className="pointer-events-none absolute inset-0 border border-red-900/50"
+          style={{ opacity: Math.min(0.8, (player.tension - 70) / 34) }}
         />
       )}
-    </div>
+    </section>
   );
 }
