@@ -1,5 +1,7 @@
 # HorroLive v3.1 Wireframes
 
+> Historical layout reference. Current creative and asset decisions are defined in [Creative Direction v4](CREATIVE_DIRECTION_V4.md) and [Art & Asset Bible v4](ART_ASSET_BIBLE_V4.md).
+
 These wireframes are binding layout references for the hospital vertical slice.
 The art-direction board is not a literal dashboard layout.
 

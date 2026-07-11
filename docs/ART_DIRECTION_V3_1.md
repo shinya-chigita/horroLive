@@ -1,5 +1,7 @@
 # HorroLive Design Freeze v3.1
 
+> Historical document. Current creative decisions are defined in [Creative Direction v4](CREATIVE_DIRECTION_V4.md), [Vertical Slice & Gimmick Direction v4](VERTICAL_SLICE_GIMMICKS_V4.md), and [Art & Asset Bible v4](ART_ASSET_BIBLE_V4.md).
+
 ## 0. Document status
 
 This document is the implementation-ready design freeze for the next HorroLive pass.

@@ -1,0 +1,262 @@
+{
+  "schemaVersion": "4.0.0",
+  "project": "HorroLive",
+  "baselineCommit": "9bde30b",
+  "updatedAt": "2026-07-11",
+  "sourceBoard": {
+    "path": "../docs/reference/horrolive-direction-board.png",
+    "size": {
+      "width": 1536,
+      "height": 1024
+    },
+    "sha256": "9818FB9AF3742A086C7748E0E266ABBE8B92ED464A187A71E2C0AF2EBC4D13A8"
+  },
+  "renderContract": {
+    "mainLogicalSize": {
+      "width": 640,
+      "height": 300
+    },
+    "floorBaselineY": 238,
+    "pipOutputSize": {
+      "width": 320,
+      "height": 180
+    },
+    "pipDelayMs": {
+      "min": 400,
+      "max": 700
+    },
+    "pipFps": {
+      "min": 12,
+      "max": 18
+    },
+    "characterCell": {
+      "width": 64,
+      "height": 80
+    },
+    "characterPivot": {
+      "x": 32,
+      "y": 76
+    },
+    "scaling": "nearest-neighbor",
+    "colorSpace": "sRGB"
+  },
+  "palette": {
+    "env.void": "#03060A",
+    "env.black": "#0A0A0A",
+    "env.wall": "#1F2529",
+    "env.structure": "#2A2F2B",
+    "ui.border": "#242824",
+    "ui.text": "#D4D3D4",
+    "ui.muted": "#6E665B",
+    "light.warm": "#D1B68B",
+    "material.rust": "#6E5132",
+    "signal.red": "#8A2026",
+    "noise.blue": "#30424C",
+    "noise.violet": "#121822",
+    "noise.magenta": "#341B2A"
+  },
+  "conceptAssets": [
+    {
+      "id": "concept_player_direction_v4",
+      "kind": "character-direction",
+      "status": "concept-approved",
+      "path": "concepts/character-direction-v4.png",
+      "promptPath": "concepts/character-direction-v4.prompt.md",
+      "size": {
+        "width": 1717,
+        "height": 916
+      },
+      "bytes": 1793454,
+      "sha256": "0947ECABF3F27B9BE488F9F2FE19C2E0BD56B211FB18E6440F09C8B2B456F9BC",
+      "generator": "built-in image_gen",
+      "runtimeUse": "reference-only"
+    },
+    {
+      "id": "concept_hospital_props_v4",
+      "kind": "prop-direction",
+      "status": "concept-approved",
+      "path": "concepts/hospital-props-direction-v4.png",
+      "promptPath": "concepts/hospital-props-direction-v4.prompt.md",
+      "size": {
+        "width": 1672,
+        "height": 941
+      },
+      "bytes": 1492240,
+      "sha256": "E60CD299E1E922F603D623265354BD604942FEDF9637C41E2DF56810121E5036",
+      "generator": "built-in image_gen",
+      "runtimeUse": "reference-only"
+    },
+    {
+      "id": "concept_observer_direction_v4_draft",
+      "kind": "anomaly-direction",
+      "status": "superseded",
+      "path": "concepts/observer-direction-v4.png",
+      "promptPath": "concepts/observer-direction-v4.prompt.md",
+      "size": {
+        "width": 1672,
+        "height": 941
+      },
+      "bytes": 1451768,
+      "sha256": "59D2B82785A52406608CFC29379D1BA0C2168E570496E5A870860A9B2DE274D5",
+      "generator": "built-in image_gen",
+      "runtimeUse": "do-not-use",
+      "supersededBy": "concept_observer_direction_v4"
+    },
+    {
+      "id": "concept_observer_direction_v4",
+      "kind": "anomaly-direction",
+      "status": "concept-approved",
+      "path": "concepts/observer-direction-v4-v2.png",
+      "promptPath": "concepts/observer-direction-v4-v2.prompt.md",
+      "size": {
+        "width": 1672,
+        "height": 941
+      },
+      "bytes": 1539923,
+      "sha256": "B5413FEF199AC4AB91E8D32D3CEE258E90F9F14369624AF0E7FCB1271C3570CB",
+      "generator": "built-in image_gen edit",
+      "runtimeUse": "reference-only"
+    }
+  ],
+  "runtimeAssets": [
+    {
+      "id": "char_player_atlas",
+      "kind": "sprite-atlas",
+      "status": "planned",
+      "sourcePath": "source/characters/char_player.aseprite",
+      "runtimePath": "runtime/atlases/char_player.png",
+      "metadataPath": "runtime/atlases/char_player.json",
+      "cell": {
+        "width": 64,
+        "height": 80
+      },
+      "pivot": {
+        "x": 32,
+        "y": 76
+      },
+      "fps": {
+        "idle": 4,
+        "walk": 8,
+        "run": 10,
+        "crouch": 6,
+        "aim": 6,
+        "interact": 8,
+        "capture": 8,
+        "startle": 8,
+        "fatigue": 4,
+        "turn": 8
+      }
+    },
+    {
+      "id": "anom_observer_atlas",
+      "kind": "sprite-atlas",
+      "status": "planned",
+      "sourcePath": "source/anomalies/anom_observer.aseprite",
+      "runtimePath": "runtime/atlases/anom_observer.png",
+      "metadataPath": "runtime/atlases/anom_observer.json",
+      "channels": [
+        "PIP",
+        "WORLD_BLEED"
+      ],
+      "tiers": [
+        0,
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "id": "env_hospital_vertical_slice",
+      "kind": "environment-kit",
+      "status": "planned",
+      "sourcePath": "source/environments/hospital/",
+      "runtimePath": "runtime/environments/hospital/",
+      "moduleWidth": 320,
+      "modules": [
+        "hospital_entry_01",
+        "hospital_corridor_01",
+        "hospital_ward_01",
+        "hospital_room_01",
+        "hospital_exit_01"
+      ],
+      "layers": [
+        "bg_far",
+        "bg_structure",
+        "stains_reflection",
+        "world_props",
+        "foreground_occluder",
+        "light_occluder"
+      ]
+    },
+    {
+      "id": "prop_hospital_atlas",
+      "kind": "prop-atlas",
+      "status": "planned",
+      "sourcePath": "source/props/prop_hospital.aseprite",
+      "runtimePath": "runtime/atlases/prop_hospital.png",
+      "metadataPath": "runtime/atlases/prop_hospital.json"
+    },
+    {
+      "id": "ui_broadcast_icons",
+      "kind": "svg-set",
+      "status": "planned",
+      "sourcePath": "source/ui/",
+      "runtimePath": "runtime/ui/",
+      "textBakedIn": false
+    },
+    {
+      "id": "fx_channel_cues",
+      "kind": "procedural-fx",
+      "status": "planned",
+      "runtimePath": "runtime/fx/channel-cues.json",
+      "effects": [
+        "FREEZE",
+        "REPEAT",
+        "SKIP",
+        "EXPOSURE",
+        "DISPLACE",
+        "AF_HUNT",
+        "FALSE_FACE_BOX",
+        "WORLD_BLEED"
+      ]
+    },
+    {
+      "id": "audio_hospital_vertical_slice",
+      "kind": "audio-set",
+      "status": "planned",
+      "sourcePath": "source/audio/hospital/",
+      "runtimePath": "runtime/audio/hospital/",
+      "sampleRates": [
+        44100,
+        48000
+      ]
+    }
+  ],
+  "requiredPropIds": [
+    "prop_bed_rusted",
+    "prop_gurney",
+    "prop_wheelchair",
+    "prop_iv_stand",
+    "prop_medicine_cart",
+    "prop_locker_closed",
+    "prop_locker_open",
+    "prop_crt_monitor",
+    "prop_room_door",
+    "prop_curtain",
+    "prop_wet_reflection",
+    "item_keycard",
+    "item_diary",
+    "item_old_photo",
+    "item_battery",
+    "item_broken_phone",
+    "gear_flashlight",
+    "gear_chest_camera",
+    "gear_backpack"
+  ],
+  "requiredEventIds": [
+    "cal_dvr_ghost",
+    "event_pip_corner_observer",
+    "event_chat_reads_first",
+    "event_viewer_distance_climax"
+  ]
+}
