@@ -436,6 +436,16 @@ export default function MainGameView({
         : 0;
       const nextBattery = Math.max(0, current.battery - drainPerSecond * dt);
 
+      const chapter = CHAPTERS.find(
+        (candidate) => candidate.id === chapterRef.current,
+      );
+      if (chapter && nextX >= chapter.endPos) {
+        // Let AppV2 resolve gates/checkpoints before the director observes the
+        // next scene. A locked boundary may rewind the player this same frame.
+        onChapterComplete();
+        return;
+      }
+
       advanceRuntime(simulationNowRef.current, nextX);
 
       let nearestDistance = Number.POSITIVE_INFINITY;
@@ -465,9 +475,6 @@ export default function MainGameView({
 
       playerRef.current = next;
       setPlayer(next);
-
-      const chapter = CHAPTERS.find((candidate) => candidate.id === chapterRef.current);
-      if (chapter && nextX >= chapter.endPos) onChapterComplete();
     };
 
     animationId = window.requestAnimationFrame(tick);
