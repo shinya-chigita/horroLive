@@ -4,10 +4,10 @@ import type { Anomaly, PlayerState, RiskTier } from '../types.ts';
 import type { SceneSnapshot } from './sceneSnapshot.ts';
 import {
   CAPTURE_MAX_DISTANCE,
+  createPipCaptureFrame,
   evaluatePipCapture,
   PIP_LOGICAL_VIEW_HEIGHT,
   PIP_LOGICAL_VIEW_WIDTH,
-  PIP_SOURCE_WIDTH,
 } from './capture.ts';
 import { createAnomalyDirectorState } from './anomalyDirector.ts';
 
@@ -17,6 +17,7 @@ const BASE_PLAYER: PlayerState = {
   isRunning: false,
   isCrouching: false,
   flashlightOn: true,
+  facing: 1,
   flashlightAngle: 0,
   battery: 100,
   tension: 10,
@@ -53,12 +54,7 @@ const makeSnapshot = (
 const centeredWorldX = (
   playerX = BASE_PLAYER.x,
   lookingRight = true,
-) => {
-  const playerScreenX = PIP_LOGICAL_VIEW_WIDTH * 0.42;
-  const sourceX = lookingRight ? PIP_LOGICAL_VIEW_WIDTH - PIP_SOURCE_WIDTH : 0;
-  const feedCenterX = sourceX + PIP_SOURCE_WIDTH / 2;
-  return playerX + feedCenterX - playerScreenX;
-};
+) => playerX + (lookingRight ? 120 : -120);
 
 const evaluate = (
   anomaly: Anomaly,
@@ -75,6 +71,14 @@ test('a centered, nearby, lit unresolved subject is capturable', () => {
   assert.equal(decision.isFramed, true);
   assert.equal(decision.canCapture, true);
   assert.equal(decision.reason, 'READY');
+});
+
+test('the exported acquisition frame matches the visible PIP lock box', () => {
+  const frame = createPipCaptureFrame();
+  assert.equal(frame.centerX, 160);
+  assert.equal(frame.centerY, 90);
+  assert.equal(frame.width, 204.8);
+  assert.equal(frame.height, 115.2);
 });
 
 test('director state opens capture only during the ACTIVE phase', () => {
@@ -101,7 +105,7 @@ test('director state opens capture only during the ACTIVE phase', () => {
   assert.equal(active.reason, 'READY');
 });
 
-test('a nearby subject behind the right-facing crop is out of frame', () => {
+test('a nearby subject behind the right-facing camera is out of frame', () => {
   const anomaly = makeAnomaly({ x: BASE_PLAYER.x - 300 });
   const decision = evaluate(anomaly);
 
@@ -111,23 +115,57 @@ test('a nearby subject behind the right-facing crop is out of frame', () => {
   assert.equal(decision.reason, 'OUT_OF_FRAME');
 });
 
-test('looking direction selects the matching left or right PIP crop', () => {
+test('a fully covered PIP subject cannot lock or capture through furniture', () => {
+  const baseState = createAnomalyDirectorState(
+    'hospital.anomaly.footsteps',
+    0,
+  );
+  const hiddenBehindBed = makeAnomaly({
+    id: 'hospital.anomaly.footsteps',
+    x: 600,
+    type: 'orb',
+    directorState: { ...baseState, phase: 'ACTIVE' },
+  });
+  const decision = evaluatePipCapture(
+    makeSnapshot(hiddenBehindBed, { x: 300 }),
+    0,
+  );
+
+  assert.equal(decision.reason, 'OCCLUDED');
+  assert.equal(decision.isFramed, false);
+  assert.equal(decision.canCapture, false);
+});
+
+test('the shared player facing selects the matching first-person corridor', () => {
   const rightSubject = makeAnomaly({ x: centeredWorldX() });
   const leftSubject = makeAnomaly({ x: centeredWorldX(BASE_PLAYER.x, false) });
 
   const rightFacing = evaluatePipCapture(makeSnapshot(rightSubject), 0);
   const wrongCrop = evaluatePipCapture(
-    makeSnapshot(rightSubject, {}, PIP_LOGICAL_VIEW_WIDTH * 0.1),
+    makeSnapshot(rightSubject, { facing: -1 }),
     0,
   );
   const leftFacing = evaluatePipCapture(
-    makeSnapshot(leftSubject, {}, PIP_LOGICAL_VIEW_WIDTH * 0.1),
+    makeSnapshot(leftSubject, { facing: -1 }),
     0,
   );
 
   assert.equal(rightFacing.reason, 'READY');
   assert.equal(wrongCrop.reason, 'OUT_OF_FRAME');
   assert.equal(leftFacing.reason, 'READY');
+});
+
+test('vertical flashlight pitch changes whether a ceiling subject is framed', () => {
+  const ceiling = makeAnomaly({
+    id: 'hospital.anomaly.ceiling',
+    x: BASE_PLAYER.x + 150,
+    yOffset: -58,
+  });
+  const level = evaluate(ceiling, 1, { flashlightAngle: 0 });
+  const upward = evaluate(ceiling, 1, { flashlightAngle: -0.5 });
+
+  assert.equal(level.isFramed, false);
+  assert.equal(upward.isFramed, true);
 });
 
 test('the candidate closest to the visible crosshair is selected deterministically', () => {

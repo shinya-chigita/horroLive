@@ -57,9 +57,15 @@ import {
   createBoardAnomalies,
   createBoardComments,
   createBoardItems,
-  getAnomalyChatCue,
   getBoardDefinition,
 } from './game/boardDefinitions';
+import {
+  createAnomalyChatBurst,
+  createPipAlertBurst,
+  createRiskTierHijack,
+  type BroadcastAnomalyPhase,
+  type BroadcastChatBurst,
+} from './game/broadcastEventDirector';
 import {
   loadProgression,
   recordRun,
@@ -68,6 +74,7 @@ import {
   type ProgressionState,
 } from './game/progression';
 import { evaluateRoute } from './game/route';
+import { getItemWorldPositions } from './game/sceneDefinitions';
 import { AudioSynth } from './utils/audio';
 
 const USER_NAMES = [
@@ -104,6 +111,7 @@ const INITIAL_PLAYER: PlayerState = {
   isRunning: false,
   isCrouching: false,
   flashlightOn: true,
+  facing: 1,
   flashlightAngle: 0,
   battery: 100,
   tension: 10,
@@ -159,12 +167,19 @@ const trapDialogFocus = (event: React.KeyboardEvent<HTMLElement>) => {
   }
 };
 
+interface BroadcastTimerTask {
+  timerId: number | null;
+  remainingMs: number;
+  startedAt: number;
+  fire: () => void;
+}
+
 const createInitialViewerRisk = (
   boardId: BoardId = 'hospital',
-  chapterId = 1,
+  _chapterId = 1,
   tier: RiskTier = 0,
 ) =>
-  transitionViewerRisk(createViewerRiskState(`${boardId}:chapter-${chapterId}`), {
+  transitionViewerRisk(createViewerRiskState(`${boardId}:stream`), {
     viewerCount: getViewerBand(tier),
   }).state;
 
@@ -219,6 +234,7 @@ export default function AppV2() {
     createBoardComments(loadedProgression.lastBoardId),
   );
   const [routeLoopCount, setRouteLoopCount] = useState(0);
+  const [isClimaxActive, setIsClimaxActive] = useState(false);
   const activeBoard = useMemo(
     () => getBoardDefinition(selectedBoardId),
     [selectedBoardId],
@@ -229,15 +245,23 @@ export default function AppV2() {
   const shouldShowRotateHint =
     phase === 'PLAYING' && isPortraitGameplay && !isRotateHintDismissed;
   const isInterfacePaused =
-    isJournalOpen || isChatOpen || isPageHidden || shouldShowRotateHint;
+    phase === 'POST_LIVE' ||
+    isJournalOpen ||
+    isChatOpen ||
+    isPageHidden ||
+    shouldShowRotateHint;
+  const isBroadcastPaused =
+    phase === 'PLAYING' &&
+    (isJournalOpen || isChatOpen || isPageHidden || shouldShowRotateHint);
 
   const playerRef = useRef(player);
+  const phaseRef = useRef(phase);
   const itemsRef = useRef(items);
   const anomaliesRef = useRef(anomalies);
   const chapterRef = useRef(chapterId);
   const runIdRef = useRef(runId);
   const routeLoopCountRef = useRef(routeLoopCount);
-  const viewerRef = useRef(viewerCount);
+  const climaxActiveRef = useRef(isClimaxActive);
   const riskTierRef = useRef(riskTier);
   const latestPipTargetRef = useRef<CameraCaptureTarget | null>(null);
   const announcedRiskBandsRef = useRef(new Set<string>());
@@ -250,6 +274,14 @@ export default function AppV2() {
   const chatSilenceUntilRef = useRef(0);
   const emptyBatteryLoggedRef = useRef(false);
   const gameOverTriggeredRef = useRef(false);
+  const broadcastTasksRef = useRef<BroadcastTimerTask[]>([]);
+  const broadcastPausedRef = useRef(isBroadcastPaused);
+  const broadcastPauseStartedAtRef = useRef<number | null>(
+    isBroadcastPaused ? Date.now() : null,
+  );
+  const alertedPipTargetIdsRef = useRef<ReadonlySet<string>>(new Set());
+  const approachedItemIdsRef = useRef(new Set<string>());
+  const passedItemIdsRef = useRef(new Set<string>());
   const journalDialogRef = useRef<HTMLDivElement | null>(null);
   const chatDialogRef = useRef<HTMLDivElement | null>(null);
   const rotateDialogRef = useRef<HTMLElement | null>(null);
@@ -262,6 +294,14 @@ export default function AppV2() {
 
     for (const candidate of anomalies) {
       if (isAnomalyResolved(candidate)) continue;
+      const candidatePhase = candidate.directorState?.phase;
+      if (
+        candidatePhase &&
+        candidatePhase !== 'TELEGRAPH' &&
+        candidatePhase !== 'ACTIVE'
+      ) {
+        continue;
+      }
       const nextDistance = Math.abs(player.x - candidate.x);
       if (nextDistance < distance) {
         anomaly = candidate;
@@ -275,6 +315,10 @@ export default function AppV2() {
   useEffect(() => {
     playerRef.current = player;
   }, [player]);
+
+  useEffect(() => {
+    phaseRef.current = phase;
+  }, [phase]);
 
   useEffect(() => {
     itemsRef.current = items;
@@ -293,6 +337,10 @@ export default function AppV2() {
   }, [routeLoopCount]);
 
   useEffect(() => {
+    climaxActiveRef.current = isClimaxActive;
+  }, [isClimaxActive]);
+
+  useEffect(() => {
     saveProgression(progression);
   }, [progression]);
 
@@ -308,17 +356,7 @@ export default function AppV2() {
   useEffect(() => {
     chapterRef.current = chapterId;
     transitionGuardRef.current = null;
-    setViewerRisk((current) =>
-      transitionViewerRisk(current, {
-        chapterId: `${selectedBoardId}:chapter-${chapterId}`,
-        viewerCount: current.viewerCount,
-      }).state,
-    );
-  }, [chapterId, selectedBoardId]);
-
-  useEffect(() => {
-    viewerRef.current = viewerCount;
-  }, [viewerCount]);
+  }, [chapterId]);
 
   useEffect(() => {
     riskTierRef.current = riskTier;
@@ -347,6 +385,121 @@ export default function AppV2() {
       ]);
     },
     [],
+  );
+
+  useEffect(() => {
+    if (phase !== 'PLAYING' || isInterfacePaused) return;
+    const positions = getItemWorldPositions(selectedBoardId);
+    items.forEach((item) => {
+      if (item.found || passedItemIdsRef.current.has(item.id)) return;
+      const itemX = positions[item.id];
+      if (itemX === undefined) return;
+      const distance = Math.abs(player.x - itemX);
+      if (distance <= 64) approachedItemIdsRef.current.add(item.id);
+      if (distance > 92 && approachedItemIdsRef.current.has(item.id)) {
+        approachedItemIdsRef.current.delete(item.id);
+        passedItemIdsRef.current.add(item.id);
+        pushComment({
+          username: 'archive_watch',
+          text: `戻って。さっきの足元、「${item.name}」を調べてない`,
+          type: 'hint',
+        });
+      }
+    });
+  }, [isInterfacePaused, items, phase, player.x, pushComment, selectedBoardId]);
+
+  const clearBroadcastTimers = useCallback(() => {
+    broadcastTasksRef.current.forEach((task) => {
+      if (task.timerId !== null) window.clearTimeout(task.timerId);
+    });
+    broadcastTasksRef.current = [];
+  }, []);
+
+  const armBroadcastTask = useCallback((task: BroadcastTimerTask) => {
+    if (broadcastPausedRef.current || task.timerId !== null) return;
+    task.startedAt = Date.now();
+    task.timerId = window.setTimeout(() => {
+      task.timerId = null;
+      task.remainingMs = 0;
+      broadcastTasksRef.current = broadcastTasksRef.current.filter(
+        (candidate) => candidate !== task,
+      );
+      task.fire();
+    }, Math.max(0, task.remainingMs));
+  }, []);
+
+  const scheduleBroadcastBurst = useCallback(
+    (burst: BroadcastChatBurst) => {
+      const scheduledRunId = runIdRef.current;
+      const broadcastNow = broadcastPausedRef.current
+        ? broadcastPauseStartedAtRef.current ?? Date.now()
+        : Date.now();
+      chatSilenceUntilRef.current = Math.max(
+        chatSilenceUntilRef.current,
+        broadcastNow + burst.ambientSuppressionMs,
+      );
+      burst.cues.forEach((cue) => {
+        const task: BroadcastTimerTask = {
+          timerId: null,
+          remainingMs: cue.delayMs,
+          startedAt: Date.now(),
+          fire: () => {
+            if (runIdRef.current !== scheduledRunId) return;
+            if (
+              phaseRef.current !== 'PLAYING' &&
+              phaseRef.current !== 'POST_LIVE'
+            ) {
+              return;
+            }
+            pushComment({
+              username: cue.username,
+              text: cue.text,
+              type: cue.type,
+              badge: cue.username === 'mod_taku' ? 'mod' : undefined,
+            });
+            if (cue.truth === 'signal') AudioSynth.playNotification();
+            if (cue.truth === 'corrupted' && !prefersReducedMotion) {
+              AudioSynth.playGlitch();
+            }
+          },
+        };
+        broadcastTasksRef.current.push(task);
+        armBroadcastTask(task);
+      });
+    },
+    [armBroadcastTask, prefersReducedMotion, pushComment],
+  );
+
+  useEffect(() => {
+    if (broadcastPausedRef.current === isBroadcastPaused) return;
+    const now = Date.now();
+    if (isBroadcastPaused) {
+      broadcastPausedRef.current = true;
+      broadcastPauseStartedAtRef.current = now;
+      broadcastTasksRef.current.forEach((task) => {
+        if (task.timerId === null) return;
+        window.clearTimeout(task.timerId);
+        task.timerId = null;
+        task.remainingMs = Math.max(
+          0,
+          task.remainingMs - (now - task.startedAt),
+        );
+      });
+      return;
+    }
+
+    const pausedAt = broadcastPauseStartedAtRef.current;
+    if (pausedAt !== null && chatSilenceUntilRef.current > pausedAt) {
+      chatSilenceUntilRef.current += now - pausedAt;
+    }
+    broadcastPauseStartedAtRef.current = null;
+    broadcastPausedRef.current = false;
+    broadcastTasksRef.current.forEach(armBroadcastTask);
+  }, [armBroadcastTask, isBroadcastPaused]);
+
+  useEffect(
+    () => () => clearBroadcastTimers(),
+    [clearBroadcastTimers],
   );
 
   const advanceViewerRisk = useCallback(() => {
@@ -382,7 +535,7 @@ export default function AppV2() {
       let text = 'ここ、空気やばくない？';
       let type: Comment['type'] = 'normal';
 
-      if (currentPlayer.tension > 88) {
+      if (riskTierRef.current >= 3 || currentPlayer.tension > 82) {
         const lines = activeBoard.chatLines.hijack;
         text = lines[Math.floor(Math.random() * lines.length)];
         type = Math.random() > 0.35 ? 'spooky' : 'glitch';
@@ -431,17 +584,18 @@ export default function AppV2() {
     const cues = activeBoard.riskCues;
 
     viewerRisk.firedBands.forEach((band) => {
-      const ledgerKey = `${selectedBoardId}:${viewerRisk.chapterId}:${band}`;
+      const ledgerKey = `${selectedBoardId}:${runIdRef.current}:${band}`;
       if (announcedRiskBandsRef.current.has(ledgerKey)) return;
       announcedRiskBandsRef.current.add(ledgerKey);
 
       const cue = cues[band];
       const tier = VIEWER_BANDS.indexOf(band) as RiskTier;
-      pushComment({
-        username: cue.username,
-        text: cue.text,
-        type: tier === 3 ? 'glitch' : tier === 0 ? 'system' : 'hint',
-      });
+      scheduleBroadcastBurst(
+        createRiskTierHijack({
+          eventId: `${runIdRef.current}:risk-${tier}`,
+          tier,
+        }),
+      );
       handleAddLog(`【RISK TIER ${tier}】${cue.log}`);
       if (tier >= 2 && !prefersReducedMotion) AudioSynth.playGlitch();
     });
@@ -451,6 +605,7 @@ export default function AppV2() {
     phase,
     prefersReducedMotion,
     pushComment,
+    scheduleBroadcastBurst,
     selectedBoardId,
     viewerRisk,
   ]);
@@ -536,6 +691,13 @@ export default function AppV2() {
     const timer = window.setTimeout(() => setShowObjective(false), 5000);
     return () => window.clearTimeout(timer);
   }, [chapterId, phase]);
+
+  useEffect(() => {
+    if (phase !== 'POST_LIVE') return undefined;
+    setShowObjective(false);
+    const timer = window.setTimeout(() => setPhase('ENDING'), 7_200);
+    return () => window.clearTimeout(timer);
+  }, [phase]);
 
   const handleToggleMute = useCallback(() => {
     setIsMuted((previous) => {
@@ -632,7 +794,7 @@ export default function AppV2() {
   }, []);
 
   useEffect(() => {
-    const active = phase === 'PLAYING';
+    const active = phase === 'PLAYING' || phase === 'POST_LIVE';
     document.documentElement.classList.toggle('gameplay-active', active);
     document.body.classList.toggle('gameplay-active', active);
     return () => {
@@ -734,28 +896,35 @@ export default function AppV2() {
       anomaly: Anomaly,
       nextPhase: AnomalyDirectorPhase,
     ) => {
-      const cue = getAnomalyChatCue(selectedBoardId, anomaly.id, nextPhase);
-      if (!cue) return;
-      const silenceMs = nextPhase === 'TELEGRAPH' ? 1_850 : 850;
-      chatSilenceUntilRef.current = Date.now() + silenceMs;
-      pushComment({
-        username:
-          nextPhase === 'TELEGRAPH'
-            ? selectedBoardId === 'school'
-              ? 'room_2B'
-              : 'nanashi'
-            : 'uro_27',
-        text: cue,
-        type:
-          nextPhase === 'MISSED'
-            ? 'glitch'
-            : nextPhase === 'TELEGRAPH'
-              ? 'hint'
-              : 'spooky',
-      });
-      AudioSynth.playNotification();
+      const authoredPhases: readonly BroadcastAnomalyPhase[] = [
+        'TELEGRAPH',
+        'ACTIVE',
+        'RECORDED',
+        'IGNORED',
+        'MISSED',
+      ];
+      if (!authoredPhases.includes(nextPhase as BroadcastAnomalyPhase)) return;
+      scheduleBroadcastBurst(
+        createAnomalyChatBurst({
+          eventId: `${runIdRef.current}:${anomaly.id}:${anomaly.directorState?.cycle ?? 0}:${nextPhase}`,
+          phase: nextPhase as BroadcastAnomalyPhase,
+          subject: anomaly.description,
+        }),
+      );
+
+      const isCalibrationAnomaly =
+        anomaly.id === 'hospital.anomaly.footsteps' ||
+        anomaly.id === 'school.anomaly.shoe-locker';
+      if (
+        isCalibrationAnomaly &&
+        riskTierRef.current === 0 &&
+        (nextPhase === 'IGNORED' || nextPhase === 'MISSED')
+      ) {
+        advanceViewerRisk();
+        handleAddLog('【DVR CALIBRATED】撮影成否にかかわらず、遅延映像の同期が確立した。');
+      }
     },
-    [pushComment, selectedBoardId],
+    [advanceViewerRisk, handleAddLog, scheduleBroadcastBurst],
   );
 
   const handlePickupItem = useCallback(
@@ -779,16 +948,77 @@ export default function AppV2() {
     [handleAddLog, pushComment],
   );
 
+  const finishRun = useCallback(
+    (resolvedEnding: EndingType, nextPhase: 'ENDING' | 'POST_LIVE') => {
+      setEndingType(resolvedEnding);
+      setProgression((current) =>
+        recordRun(current, {
+          runId: runIdRef.current,
+          boardId: selectedBoardId,
+          mode: runMode,
+          ending: resolvedEnding,
+          foundItemIds: itemsRef.current
+            .filter((item) => item.found)
+            .map((item) => item.id),
+          recordedAnomalyIds: anomaliesRef.current
+            .filter((anomaly) => anomaly.captured)
+            .map((anomaly) => anomaly.id),
+        }),
+      );
+      climaxActiveRef.current = false;
+      setIsClimaxActive(false);
+      phaseRef.current = nextPhase;
+      setPhase(nextPhase);
+      AudioSynth.playStinger();
+    },
+    [runMode, selectedBoardId],
+  );
+
   const handlePipTargetChange = useCallback(
     (target: CameraCaptureTarget | null) => {
       latestPipTargetRef.current = target;
+      const anomaly = target?.targetId
+        ? anomaliesRef.current.find(
+            (candidate) => candidate.id === target.targetId,
+          ) ?? null
+        : null;
+      const result = createPipAlertBurst({
+        eventId: `${runIdRef.current}:pip-alert:${target?.targetId ?? 'none'}`,
+        target,
+        alertedTargetIds: alertedPipTargetIdsRef.current,
+        isCameraOnlyTarget: anomaly?.visibleOnlyInPip === true,
+        subject: anomaly?.description ?? '人のいない場所',
+      });
+      alertedPipTargetIdsRef.current = result.alertedTargetIds;
+      if (result.burst) scheduleBroadcastBurst(result.burst);
     },
-    [],
+    [scheduleBroadcastBurst],
   );
 
   const handleCaptureAnomaly = useCallback((requestedTarget?: CameraCaptureTarget | null) => {
+    if (phaseRef.current !== 'PLAYING') return false;
     const captureDecision = requestedTarget ?? latestPipTargetRef.current;
     const currentPlayer = playerRef.current;
+    if (
+      climaxActiveRef.current &&
+      captureDecision?.targetId === 'stream.observer' &&
+      captureDecision.canCapture
+    ) {
+      setViewerRisk((current) =>
+        transitionViewerRisk(current, {
+          viewerCount: getViewerBand(3),
+        }).state,
+      );
+      handleAddLog('【KEEP STREAMING】決定的な人影へカメラを向けた。終了操作が映像から消えた。');
+      scheduleBroadcastBurst(
+        createRiskTierHijack({
+          eventId: `${runIdRef.current}:never-offline`,
+          tier: 3,
+        }),
+      );
+      finishRun('OVER_EXPLOITED', 'POST_LIVE');
+      return true;
+    }
     const target = captureDecision?.targetId
       ? anomaliesRef.current.find(
           (candidate) => candidate.id === captureDecision.targetId,
@@ -826,6 +1056,13 @@ export default function AppV2() {
         type: 'hype',
         badge: 'mod',
       });
+      scheduleBroadcastBurst(
+        createAnomalyChatBurst({
+          eventId: `${runIdRef.current}:${target.id}:recorded`,
+          phase: 'RECORDED',
+          subject: target.description,
+        }),
+      );
       return true;
     }
 
@@ -842,6 +1079,7 @@ export default function AppV2() {
       NO_TARGET: '何もいない所を撮ってる。今のノイズ、増えたぞ。',
       OUT_OF_FRAME: '中央から外れてる。右上の照準を見て。',
       OUT_OF_RANGE: '遠すぎる。近づくなら走らないほうがいい。',
+      OCCLUDED: '棚か扉で隠れてる。ライトを振って、死角から外して。',
       FLASHLIGHT_OFF: '真っ暗でピントが拾えてない。ライトを点けて。',
       RISK_LOCKED: 'まだ輪郭だけだ。カメラが対象として認識してない。',
       RESOLVED: 'その映像はもう記録済みだ。電池を無駄にするな。',
@@ -859,43 +1097,20 @@ export default function AppV2() {
       type: 'hint',
     });
     return false;
-  }, [advanceViewerRisk, handleAddLog, prefersReducedMotion, pushComment]);
+  }, [advanceViewerRisk, finishRun, handleAddLog, prefersReducedMotion, pushComment, scheduleBroadcastBurst]);
 
-  const resolveEnding = useCallback(() => {
+  const handleExit = useCallback(() => {
+    if (!climaxActiveRef.current) return;
     const totalFound = itemsRef.current.filter((item) => item.found).length;
     const totalCaptured = anomaliesRef.current.filter((anomaly) => anomaly.captured).length;
-    const viewers = viewerRef.current;
-    let resolvedEnding: EndingType;
-
-    if (
+    const resolvedEnding: EndingType =
       totalFound === activeBoard.items.length &&
       totalCaptured >= Math.max(1, activeBoard.anomalies.length - 1)
-    ) {
-      resolvedEnding = 'LOST_ARCHIVE';
-    } else if (viewers > 130000) {
-      resolvedEnding = 'OVER_EXPLOITED';
-    } else {
-      resolvedEnding = 'ESCAPED';
-    }
-
-    setEndingType(resolvedEnding);
-    setProgression((current) =>
-      recordRun(current, {
-        runId: runIdRef.current,
-        boardId: selectedBoardId,
-        mode: runMode,
-        ending: resolvedEnding,
-        foundItemIds: itemsRef.current
-          .filter((item) => item.found)
-          .map((item) => item.id),
-        recordedAnomalyIds: anomaliesRef.current
-          .filter((anomaly) => anomaly.captured)
-          .map((anomaly) => anomaly.id),
-      }),
-    );
-    setPhase('ENDING');
-    AudioSynth.playStinger();
-  }, [activeBoard, runMode, selectedBoardId]);
+        ? 'LOST_ARCHIVE'
+        : 'ESCAPED';
+    handleAddLog('【EXIT】撮影を打ち切り、非常口から建物の外へ脱出した。');
+    finishRun(resolvedEnding, 'ENDING');
+  }, [activeBoard, finishRun, handleAddLog]);
 
   const handleChapterComplete = useCallback(() => {
     const currentChapter = chapterRef.current;
@@ -972,19 +1187,42 @@ export default function AppV2() {
       return;
     }
 
-    resolveEnding();
+    climaxActiveRef.current = true;
+    setIsClimaxActive(true);
+    setShowObjective(true);
+    setViewerRisk((current) =>
+      transitionViewerRisk(current, {
+        viewerCount: Math.max(current.viewerCount, getViewerBand(2)),
+      }).state,
+    );
+    handleAddLog('【FINAL CHOICE】Eで非常口から脱出するか、右上の人影をCAPTUREして配信を続ける。');
+    pushComment({
+      username: 'mod_taku',
+      text: '非常口でEなら脱出。右上の人影を撮れば、たぶんもう配信は切れない。',
+      type: 'hint',
+      badge: 'mod',
+    });
   }, [
     activeBoard,
     handleAddLog,
     prefersReducedMotion,
     pushComment,
-    resolveEnding,
   ]);
 
   const handleRetry = useCallback(() => {
     const currentChapter = chapterRef.current;
     canonicalSceneHistory.clear();
+    clearBroadcastTimers();
     latestPipTargetRef.current = null;
+    alertedPipTargetIdsRef.current = new Set();
+    approachedItemIdsRef.current.clear();
+    passedItemIdsRef.current.clear();
+    transitionGuardRef.current = null;
+    if (routeGuardTimerRef.current !== null) {
+      window.clearTimeout(routeGuardTimerRef.current);
+      routeGuardTimerRef.current = null;
+    }
+    chatSilenceUntilRef.current = 0;
     setPlayer({
       ...INITIAL_PLAYER,
       x: Math.max(
@@ -1025,8 +1263,11 @@ export default function AppV2() {
       return next;
     });
     gameOverTriggeredRef.current = false;
+    climaxActiveRef.current = false;
+    setIsClimaxActive(false);
     setIsJournalOpen(false);
     setIsChatOpen(false);
+    phaseRef.current = 'PLAYING';
     setPhase('PLAYING');
     handleAddLog('【RECONNECT】直前のセーフドアから配信を再接続した。');
     pushComment({
@@ -1035,7 +1276,7 @@ export default function AppV2() {
       type: 'hype',
       badge: 'mod',
     });
-  }, [activeBoard.chapters, handleAddLog, modeDefinition, pushComment]);
+  }, [activeBoard.chapters, clearBroadcastTimers, handleAddLog, modeDefinition, pushComment]);
 
   const prepareBoardSession = useCallback(
     (boardId: BoardId, mode: RunMode, nextPhase: GamePhase = 'INTRO_STORY') => {
@@ -1051,7 +1292,11 @@ export default function AppV2() {
       const nextAnomalies = createBoardAnomalies(boardId);
 
       canonicalSceneHistory.clear();
+      clearBroadcastTimers();
       latestPipTargetRef.current = null;
+      alertedPipTargetIdsRef.current = new Set();
+      approachedItemIdsRef.current.clear();
+      passedItemIdsRef.current.clear();
       announcedRiskBandsRef.current.clear();
       transitionGuardRef.current = null;
       if (routeGuardTimerRef.current !== null) {
@@ -1077,6 +1322,8 @@ export default function AppV2() {
       setLogs([...board.initialLogs]);
       setComments(createBoardComments(boardId));
       setRouteLoopCount(0);
+      climaxActiveRef.current = false;
+      setIsClimaxActive(false);
       setIntroStep(0);
       setEndingType('ESCAPED');
       setIsJournalOpen(false);
@@ -1092,7 +1339,7 @@ export default function AppV2() {
       );
       setPhase(nextPhase);
     },
-    [],
+    [clearBroadcastTimers],
   );
 
   const startSelectedBoard = useCallback(() => {
@@ -1101,19 +1348,21 @@ export default function AppV2() {
 
   const returnToTitle = useCallback(() => {
     canonicalSceneHistory.clear();
+    clearBroadcastTimers();
     latestPipTargetRef.current = null;
     setIsJournalOpen(false);
     setIsChatOpen(false);
     setPhase('TITLE');
-  }, []);
+  }, [clearBroadcastTimers]);
 
   const returnToBoardSelect = useCallback(() => {
     canonicalSceneHistory.clear();
+    clearBroadcastTimers();
     latestPipTargetRef.current = null;
     setIsJournalOpen(false);
     setIsChatOpen(false);
     setPhase('BOARD_SELECT');
-  }, []);
+  }, [clearBroadcastTimers]);
 
   const advanceIntro = useCallback(() => {
     if (introStep < activeBoard.intros.length - 1) {
@@ -1146,10 +1395,15 @@ export default function AppV2() {
   );
   const signalBlocked = player.tension > 82;
   const endingCopy = activeBoard.endings[endingType];
+  const isLiveSurface = phase === 'PLAYING' || phase === 'POST_LIVE';
+  const missionSteps = ['侵入', '異変', '撮影', '配信異常', '脱出'] as const;
+  const missionStep = isClimaxActive
+    ? missionSteps.length - 1
+    : Math.min(missionSteps.length - 2, Math.max(0, chapterId - 1));
 
   return (
     <div
-      className={`${phase === 'PLAYING' ? 'h-dvh overflow-hidden' : 'min-h-screen overflow-x-hidden'} bg-[#050505] text-zinc-100 selection:bg-red-600/40 selection:text-white`}
+      className={`${isLiveSurface ? 'h-dvh overflow-hidden' : 'min-h-screen overflow-x-hidden'} bg-[#050505] text-zinc-100 selection:bg-red-600/40 selection:text-white`}
       data-reduced-motion={prefersReducedMotion ? 'true' : 'false'}
     >
       <div className="pointer-events-none fixed inset-0 broadcast-grid opacity-35" />
@@ -1232,8 +1486,8 @@ export default function AppV2() {
         </section>
       )}
 
-      {phase === 'PLAYING' && (
-        <div className="playing-shell relative z-10">
+      {isLiveSurface && (
+        <div className={`playing-shell relative z-10 ${phase === 'POST_LIVE' ? 'post-live-shell' : ''}`}>
           <StreamHeaderV2
             viewerCount={viewerCount}
             battery={Math.ceil(player.battery)}
@@ -1249,7 +1503,7 @@ export default function AppV2() {
             onOpenJournal={openJournal}
             onOpenChat={openChat}
             onShowObjective={() => setShowObjective(true)}
-            isInert={isJournalOpen || isChatOpen || shouldShowRotateHint}
+            isInert={phase === 'POST_LIVE' || isJournalOpen || isChatOpen || shouldShowRotateHint}
           />
 
           {shouldShowRotateHint && (
@@ -1272,7 +1526,7 @@ export default function AppV2() {
 
           <main
             className="playing-layout"
-            inert={isJournalOpen || shouldShowRotateHint ? true : undefined}
+            inert={phase === 'POST_LIVE' || isJournalOpen || shouldShowRotateHint ? true : undefined}
           >
             <div
               className="playing-main"
@@ -1303,7 +1557,29 @@ export default function AppV2() {
                   activeWindowMultiplier={modeDefinition.activeWindowMultiplier}
                   onAnomalyCue={handleAnomalyCue}
                   isPaused={isInterfacePaused}
+                  climaxActive={isClimaxActive}
+                  onExit={handleExit}
+                  reducedMotion={prefersReducedMotion}
+                  hidePlayer={phase === 'POST_LIVE'}
                 />
+
+                <section className="mission-tracker" aria-label="配信ミッション進行">
+                  <div className="mission-spine">
+                    {missionSteps.map((step, index) => (
+                      <span
+                        key={step}
+                        data-state={index < missionStep ? 'done' : index === missionStep ? 'active' : 'pending'}
+                      >
+                        {step}
+                      </span>
+                    ))}
+                  </div>
+                  <strong>
+                    {isClimaxActive
+                      ? 'E：脱出 ／ 右上の人影をCAPTURE：配信継続'
+                      : activeBoard.chapters[chapterId - 1].description}
+                  </strong>
+                </section>
 
                 {showObjective && (
                   <section className="current-objective" aria-label="現在の目的">
@@ -1318,6 +1594,14 @@ export default function AppV2() {
                     <button type="button" onClick={() => setShowObjective(false)} aria-label="目的表示を閉じる">
                       <X aria-hidden="true" />
                     </button>
+                  </section>
+                )}
+
+                {phase === 'POST_LIVE' && (
+                  <section className="post-live-absence" aria-label="配信者消失後も続くライブ配信">
+                    <p>SUBJECT NOT FOUND</p>
+                    <strong>配信者は画面から消えた。</strong>
+                    <span>LIVE SIGNAL CONTINUES / 終了操作を受け付けません</span>
                   </section>
                 )}
               </div>
@@ -1351,7 +1635,8 @@ export default function AppV2() {
                   loopCount={routeLoopCount}
                   riskTier={riskTier}
                   reducedMotion={prefersReducedMotion}
-                  isPaused={isInterfacePaused}
+                  isPaused={isInterfacePaused && phase !== 'POST_LIVE'}
+                  climaxActive={isClimaxActive}
                 />
               </div>
 
@@ -1397,6 +1682,17 @@ export default function AppV2() {
               </div>
             </aside>
           </main>
+
+          {phase === 'POST_LIVE' && (
+            <p
+              className="sr-only"
+              role="status"
+              aria-live="assertive"
+              aria-atomic="true"
+            >
+              配信者は画面から消えました。しかしLIVE配信は終了せず、映像とコメントだけが続いています。
+            </p>
+          )}
 
           {isJournalOpen && (
             <div

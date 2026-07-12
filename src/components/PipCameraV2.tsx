@@ -22,10 +22,10 @@ import {
   RiskTier,
 } from '../types';
 import {
-  PIXEL_VIEW_HEIGHT,
-  PIXEL_VIEW_WIDTH,
-  renderPixelScene,
-} from '../utils/pixelScene';
+  PIP_PERSPECTIVE_HEIGHT,
+  PIP_PERSPECTIVE_WIDTH,
+  renderPipPerspectiveScene,
+} from '../utils/pipPerspectiveScene';
 import {
   canonicalSceneHistory,
   createSceneSnapshot,
@@ -34,8 +34,15 @@ import {
 import {
   CameraCaptureTarget,
   evaluatePipCapture,
+  PIP_CAPTURE_FRAME_HEIGHT_RATIO,
+  PIP_CAPTURE_FRAME_WIDTH_RATIO,
 } from '../game/capture';
 import { getActivePipCameraEffect } from '../game/anomalyPresentation';
+import {
+  createSyntheticThreatCaptureTarget,
+  getViewerThreatCameraPresentation,
+  getViewerThreatProfile,
+} from '../game/viewerThreat';
 
 export interface PipCameraV2Props {
   currentAnomaly: Anomaly | null;
@@ -54,6 +61,7 @@ export interface PipCameraV2Props {
   riskTier?: RiskTier;
   reducedMotion?: boolean;
   isPaused?: boolean;
+  climaxActive?: boolean;
 }
 
 interface FeedMetadata {
@@ -64,6 +72,7 @@ interface FeedMetadata {
   riskTier: RiskTier;
   reducedMotion: boolean;
   isPaused: boolean;
+  climaxActive: boolean;
 }
 
 interface CanonicalFallback {
@@ -73,9 +82,15 @@ interface CanonicalFallback {
   items?: GameItem[];
 }
 
-const WIDTH = 320;
-const HEIGHT = 180;
-const SOURCE_WIDTH = Math.round((PIXEL_VIEW_HEIGHT * 16) / 9);
+interface DisplayedTelemetry {
+  flashlightOn: boolean;
+  battery: number;
+  facing: PlayerState['facing'];
+  pitchDegrees: number;
+}
+
+const WIDTH = PIP_PERSPECTIVE_WIDTH;
+const HEIGHT = PIP_PERSPECTIVE_HEIGHT;
 const clamp = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, value));
 
@@ -84,7 +99,6 @@ function fallbackSnapshot(
   fallback: CanonicalFallback,
 ): SceneSnapshot | null {
   if (!fallback.player || !fallback.anomalies || !fallback.items) return null;
-  const direction = fallback.player.flashlightAngle < -Math.PI / 2 ? -1 : 1;
   return createSceneSnapshot({
     timestamp: now,
     boardId: fallback.boardId,
@@ -92,8 +106,8 @@ function fallbackSnapshot(
     anomalies: fallback.anomalies,
     items: fallback.items,
     mouse: {
-      x: direction > 0 ? PIXEL_VIEW_WIDTH * 0.82 : PIXEL_VIEW_WIDTH * 0.12,
-      y: PIXEL_VIEW_HEIGHT * 0.52,
+      x: fallback.player.facing > 0 ? 560 : 80,
+      y: 150 + Math.sin(fallback.player.flashlightAngle) * 220,
     },
     isMoving: fallback.player.isRunning,
   });
@@ -115,6 +129,7 @@ function PipCameraV2({
   riskTier = 0,
   reducedMotion = false,
   isPaused = false,
+  climaxActive = false,
 }: PipCameraV2Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const loopCountRef = useRef(loopCount);
@@ -126,6 +141,7 @@ function PipCameraV2({
     riskTier,
     reducedMotion,
     isPaused,
+    climaxActive,
   });
   const canonicalFallbackRef = useRef<CanonicalFallback>({
     boardId,
@@ -140,6 +156,15 @@ function PipCameraV2({
   const [captureFeedback, setCaptureFeedback] = useState<string | null>(null);
   const [displayedTarget, setDisplayedTarget] =
     useState<CameraCaptureTarget | null>(null);
+  const initialTelemetry: DisplayedTelemetry = {
+    flashlightOn,
+    battery: Math.max(0, Math.ceil(player?.battery ?? 0)),
+    facing: player?.facing ?? 1,
+    pitchDegrees: Math.round(((player?.flashlightAngle ?? 0) * 180) / Math.PI),
+  };
+  const displayedTelemetryRef = useRef(initialTelemetry);
+  const [displayedTelemetry, setDisplayedTelemetry] =
+    useState<DisplayedTelemetry>(initialTelemetry);
 
   feedRef.current = {
     anomaly: currentAnomaly,
@@ -149,6 +174,7 @@ function PipCameraV2({
     riskTier,
     reducedMotion,
     isPaused,
+    climaxActive,
   };
   canonicalFallbackRef.current = { boardId, player, anomalies, items };
   loopCountRef.current = loopCount;
@@ -188,8 +214,8 @@ function PipCameraV2({
     if (!ctx) return;
 
     const sceneCanvas = document.createElement('canvas');
-    sceneCanvas.width = PIXEL_VIEW_WIDTH;
-    sceneCanvas.height = PIXEL_VIEW_HEIGHT;
+    sceneCanvas.width = WIDTH;
+    sceneCanvas.height = HEIGHT;
     const sceneCtx = sceneCanvas.getContext('2d', { alpha: false });
     if (!sceneCtx) return;
 
@@ -280,59 +306,89 @@ function PipCameraV2({
       }
       if (!snapshot) return;
 
-      const nextTarget = evaluatePipCapture(snapshot, metadata.riskTier);
+      const nextTelemetry: DisplayedTelemetry = {
+        flashlightOn:
+          snapshot.player.flashlightOn && snapshot.player.battery > 0,
+        battery: Math.max(0, Math.ceil(snapshot.player.battery)),
+        facing: snapshot.player.facing,
+        pitchDegrees: Math.round(
+          (snapshot.player.flashlightAngle * 180) / Math.PI,
+        ),
+      };
+      const previousTelemetry = displayedTelemetryRef.current;
+      if (
+        previousTelemetry.flashlightOn !== nextTelemetry.flashlightOn ||
+        previousTelemetry.battery !== nextTelemetry.battery ||
+        previousTelemetry.facing !== nextTelemetry.facing ||
+        previousTelemetry.pitchDegrees !== nextTelemetry.pitchDegrees
+      ) {
+        displayedTelemetryRef.current = nextTelemetry;
+        setDisplayedTelemetry(nextTelemetry);
+      }
+
+      const anomalyTarget = evaluatePipCapture(
+        snapshot,
+        metadata.riskTier,
+        loopCountRef.current,
+      );
+      const threatProfile = getViewerThreatProfile(metadata.riskTier);
+      const threatPresentation = getViewerThreatCameraPresentation(
+        threatProfile,
+        loopCountRef.current,
+      );
+      const syntheticThreatTarget = createSyntheticThreatCaptureTarget(
+        threatProfile,
+        metadata.climaxActive,
+        snapshot.player,
+        loopCountRef.current,
+        snapshot.boardId,
+      );
+      const nextTarget = syntheticThreatTarget.targetId
+        ? syntheticThreatTarget
+        : anomalyTarget;
       const previousTarget = displayedTargetRef.current;
       if (
         !previousTarget ||
         previousTarget.targetId !== nextTarget.targetId ||
         previousTarget.reason !== nextTarget.reason ||
         previousTarget.distance !== nextTarget.distance ||
-        previousTarget.isFramed !== nextTarget.isFramed
+        previousTarget.isFramed !== nextTarget.isFramed ||
+        previousTarget.projection?.centerX !== nextTarget.projection?.centerX ||
+        previousTarget.projection?.centerY !== nextTarget.projection?.centerY ||
+        previousTarget.projection?.width !== nextTarget.projection?.width ||
+        previousTarget.projection?.height !== nextTarget.projection?.height
       ) {
         displayedTargetRef.current = nextTarget;
         setDisplayedTarget(nextTarget);
         targetChangeRef.current?.(nextTarget);
       }
 
-      renderPixelScene({
+      renderPipPerspectiveScene({
         ctx: sceneCtx,
-        player: snapshot.player,
-        anomalies: snapshot.anomalies,
-        items: snapshot.items,
-        mouse: snapshot.mouse,
-        now: snapshot.timestamp,
-        isMoving: snapshot.isMoving,
-        boardId: snapshot.boardId,
+        snapshot,
         riskTier: metadata.riskTier,
         loopCount: loopCountRef.current,
-        channel: 'pip',
-        recordSnapshot: false,
+        now: snapshot.timestamp,
+        viewerThreat: threatPresentation,
       });
 
-      const lookingRight = snapshot.mouse.x >= PIXEL_VIEW_WIDTH * 0.42;
-      const sourceX = lookingRight ? PIXEL_VIEW_WIDTH - SOURCE_WIDTH : 0;
       const exposureWave = metadata.reducedMotion
         ? 0
         : Math.sin(now / (310 - distortion * 90)) *
           (0.025 + distortion * 0.085);
       const exposure =
-        (snapshot.player.flashlightOn ? 0.92 : 1.08) + exposureWave;
+        (snapshot.player.flashlightOn ? 1.06 : 1.08) + exposureWave;
 
       ctx.save();
       ctx.imageSmoothingEnabled = false;
       ctx.fillStyle = '#020403';
       ctx.fillRect(0, 0, WIDTH, HEIGHT);
-      ctx.globalAlpha = clamp(exposure, 0.68, 1.16);
-      ctx.filter =
-        now < focusBlurUntil || now < mistimeUntilRef.current
-          ? 'blur(0.9px)'
-          : 'none';
+      ctx.globalAlpha = 1;
+      const blurActive =
+        now < focusBlurUntil || now < mistimeUntilRef.current;
+      ctx.filter = `${blurActive ? 'blur(0.9px) ' : ''}brightness(${clamp(exposure, 0.84, 1.16)}) contrast(1.04)`;
       ctx.drawImage(
         sceneCanvas,
-        sourceX,
-        0,
-        SOURCE_WIDTH,
-        PIXEL_VIEW_HEIGHT,
         0,
         0,
         WIDTH,
@@ -340,10 +396,12 @@ function PipCameraV2({
       );
       ctx.filter = 'none';
       ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = 'screen';
       ctx.fillStyle = snapshot.player.flashlightOn
-        ? 'rgba(35,53,43,0.13)'
-        : 'rgba(45,78,62,0.22)';
+        ? 'rgba(35,53,43,0.07)'
+        : 'rgba(45,78,62,0.14)';
       ctx.fillRect(0, 0, WIDTH, HEIGHT);
+      ctx.globalCompositeOperation = 'source-over';
 
       if (noiseCtx && noiseImage && now - lastNoiseAt > 70 - distortion * 22) {
         lastNoiseAt = now;
@@ -366,11 +424,6 @@ function PipCameraV2({
         ctx.globalAlpha = 1;
       }
 
-      for (let y = 0; y < HEIGHT; y += 3) {
-        ctx.fillStyle = `rgba(0,0,0,${0.2 + distortion * 0.08})`;
-        ctx.fillRect(0, y, WIDTH, 1);
-      }
-
       if (
         !metadata.reducedMotion &&
         distortion > 0.35 &&
@@ -378,18 +431,15 @@ function PipCameraV2({
       ) {
         const stripY = Math.floor(Math.random() * HEIGHT);
         const stripHeight = 1 + Math.floor(Math.random() * (3 + distortion * 10));
-        const sourceY = Math.floor((stripY / HEIGHT) * PIXEL_VIEW_HEIGHT);
-        const sourceHeight = Math.max(
-          1,
-          Math.ceil((stripHeight / HEIGHT) * PIXEL_VIEW_HEIGHT),
-        );
+        const sourceY = stripY;
+        const sourceHeight = stripHeight;
         const displacement = Math.round((Math.random() - 0.5) * (5 + distortion * 19));
         ctx.globalAlpha = 0.2 + distortion * 0.38;
         ctx.drawImage(
           sceneCanvas,
-          sourceX,
+          0,
           sourceY,
-          SOURCE_WIDTH,
+          WIDTH,
           sourceHeight,
           displacement,
           stripY,
@@ -403,18 +453,6 @@ function PipCameraV2({
         }
       }
 
-      const vignette = ctx.createRadialGradient(
-        WIDTH / 2,
-        HEIGHT / 2,
-        34,
-        WIDTH / 2,
-        HEIGHT / 2,
-        190,
-      );
-      vignette.addColorStop(0, 'rgba(0,0,0,0)');
-      vignette.addColorStop(1, 'rgba(0,0,0,0.84)');
-      ctx.fillStyle = vignette;
-      ctx.fillRect(0, 0, WIDTH, HEIGHT);
       ctx.restore();
     };
 
@@ -458,6 +496,40 @@ function PipCameraV2({
   );
   const captureReady = displayedTarget?.canCapture === true;
   const captureUnavailable = displayedTarget?.reason === 'BATTERY_EMPTY';
+  const projectedTargetStyle: React.CSSProperties | undefined =
+    displayedTarget?.projection
+      ? {
+          left: `${clamp(
+            (displayedTarget.projection.centerX /
+              displayedTarget.projection.viewportWidth) *
+              100,
+            4,
+            96,
+          )}%`,
+          top: `${clamp(
+            (displayedTarget.projection.centerY /
+              displayedTarget.projection.viewportHeight) *
+              100,
+            6,
+            94,
+          )}%`,
+          width: `${clamp(
+            (displayedTarget.projection.width /
+              displayedTarget.projection.viewportWidth) *
+              100,
+            10,
+            30,
+          )}%`,
+          height: `${clamp(
+            (displayedTarget.projection.height /
+              displayedTarget.projection.viewportHeight) *
+              100,
+            16,
+            62,
+          )}%`,
+          transform: 'translate(-50%, -50%)',
+        }
+      : undefined;
 
   return (
     <section
@@ -471,7 +543,6 @@ function PipCameraV2({
         className="pixel-canvas h-full w-full object-cover"
       />
       <div className="pointer-events-none absolute inset-0 crt-scanlines opacity-25" />
-      <div className="pointer-events-none absolute inset-0 pixel-screen-vignette" />
       <div className="pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between p-2.5">
         <div className="flex items-center gap-1.5 border border-white/10 bg-black/75 px-2 py-1 font-mono text-[7px] uppercase tracking-[0.14em] text-zinc-400">
           <span className="h-1.5 w-1.5 bg-red-700" /> rec / cam-01
@@ -483,15 +554,31 @@ function PipCameraV2({
         </div>
       </div>
       <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+        <div
+          className={`absolute border transition ${captureReady ? 'border-red-700/35' : tracked ? 'border-zinc-300/24' : 'border-zinc-500/12'}`}
+          style={{
+            width: `${PIP_CAPTURE_FRAME_WIDTH_RATIO * 100}%`,
+            height: `${PIP_CAPTURE_FRAME_HEIGHT_RATIO * 100}%`,
+          }}
+          aria-hidden="true"
+        >
+          <span className="absolute -left-px -top-px h-2 w-2 border-l border-t border-current" />
+          <span className="absolute -right-px -top-px h-2 w-2 border-r border-t border-current" />
+          <span className="absolute -bottom-px -left-px h-2 w-2 border-b border-l border-current" />
+          <span className="absolute -bottom-px -right-px h-2 w-2 border-b border-r border-current" />
+        </div>
         <Crosshair
           className={`h-7 w-7 transition ${tracked ? 'text-zinc-200 opacity-80' : 'text-zinc-500 opacity-20'}`}
           strokeWidth={1}
         />
       </div>
       {tracked && (
-        <div className="pointer-events-none absolute left-1/2 top-1/2 h-20 w-16 -translate-x-1/2 -translate-y-[56%] border border-zinc-300/55">
+        <div
+          className="pointer-events-none absolute border border-zinc-300/55"
+          style={projectedTargetStyle}
+        >
           <span className="absolute -top-4 left-0 whitespace-nowrap font-mono text-[6px] uppercase tracking-[0.12em] text-zinc-400">
-            shape drift // uncertain
+            face? // confidence 0.41
           </span>
           <span className="absolute -left-px -top-px h-2 w-2 border-l-2 border-t-2 border-zinc-200" />
           <span className="absolute -right-px -top-px h-2 w-2 border-r-2 border-t-2 border-zinc-200" />
@@ -499,13 +586,32 @@ function PipCameraV2({
           <span className="absolute -bottom-px -right-px h-2 w-2 border-b-2 border-r-2 border-zinc-200" />
         </div>
       )}
+      {!tracked && riskTier >= 1 && (
+        <>
+          <div className="pointer-events-none absolute left-[24%] top-[28%] h-9 w-7 border border-zinc-400/25">
+            <span className="absolute -top-3 left-0 font-mono text-[5px] uppercase tracking-[0.08em] text-zinc-500/70">
+              face?
+            </span>
+          </div>
+          {riskTier >= 3 && (
+            <div className="pointer-events-none absolute right-[7%] top-[18%] h-14 w-10 border border-red-700/35">
+              <span className="absolute -bottom-3 right-0 whitespace-nowrap font-mono text-[5px] tracking-[0.08em] text-red-700/70">
+                NO SUBJECT
+              </span>
+            </div>
+          )}
+        </>
+      )}
       <div className="pip-telemetry pointer-events-none absolute bottom-2.5 left-2.5 space-y-1 font-mono text-[6px] uppercase tracking-[0.12em] text-zinc-600">
         <p className="flex items-center gap-1">
           <Radio className="h-2.5 w-2.5" />
-          {flashlightOn ? 'LOW LIGHT' : 'IR GAIN +18'} / DVR 0.4–0.7s
+          {displayedTelemetry.flashlightOn ? 'LOW LIGHT' : 'IR GAIN +18'} / DVR 0.4–0.7s
         </p>
         <p className="flex items-center gap-1">
-          <BatteryMedium className="h-2.5 w-2.5" /> CAM 88%
+          <BatteryMedium className="h-2.5 w-2.5" /> RIG {displayedTelemetry.battery}%
+        </p>
+        <p>
+          VIEW {displayedTelemetry.facing === -1 ? '←' : '→'} / PITCH {displayedTelemetry.pitchDegrees}°
         </p>
         <p>
           DIST{' '}

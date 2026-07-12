@@ -25,6 +25,14 @@ import {
   type HospitalAssetKey,
   type ObserverAtlasTier,
 } from '../game/runtimeVisualAssets';
+import {
+  createShadowPolygon,
+  getBlockerApertureBounds,
+  getFlashlightBlockerProfile,
+  getNearestForwardBlockers,
+  type MainViewFlashlightBlocker,
+} from '../game/flashlightOcclusion';
+import { shouldRenderMainBleed } from '../game/viewerThreat';
 
 export const PIXEL_VIEW_WIDTH = 640;
 export const PIXEL_VIEW_HEIGHT = 300;
@@ -70,6 +78,8 @@ export interface PixelSceneInput {
   loopCount?: number;
   channel?: SceneRenderChannel;
   recordSnapshot?: boolean;
+  reducedMotion?: boolean;
+  hidePlayer?: boolean;
 }
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
@@ -674,6 +684,35 @@ function drawEnvironment(
   });
 }
 
+/**
+ * Environment props are initially painted with the room, then semantic
+ * blockers are repainted after anomalies. This small foreground pass lets a
+ * locker, door, curtain, bed, or similar silhouette physically cover an
+ * apparition without duplicating board-specific coordinate logic.
+ */
+function drawForegroundOccluders(
+  ctx: CanvasRenderingContext2D,
+  playerX: number,
+  boardId: BoardId,
+  channel: SceneRenderChannel,
+  boardDifferenceActive: boolean,
+) {
+  getSceneDefinitions(boardId).forEach((scene) => {
+    scene.props.forEach((prop) => {
+      if (!getFlashlightBlockerProfile(prop)) return;
+      drawWorldProp(
+        ctx,
+        prop,
+        playerX,
+        scene.palette,
+        channel,
+        boardDifferenceActive,
+        boardId,
+      );
+    });
+  });
+}
+
 function drawItem(
   ctx: CanvasRenderingContext2D,
   item: GameItem,
@@ -857,15 +896,96 @@ function drawAnomaly(
   ctx.restore();
 }
 
+interface FlashlightMaskSurface {
+  canvas: HTMLCanvasElement;
+  ctx: CanvasRenderingContext2D;
+}
+
+let flashlightMaskSurface: FlashlightMaskSurface | null = null;
+
+function getFlashlightMaskSurface(): FlashlightMaskSurface | null {
+  if (flashlightMaskSurface) return flashlightMaskSurface;
+  if (typeof document === 'undefined') return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = PIXEL_VIEW_WIDTH;
+  canvas.height = PIXEL_VIEW_HEIGHT;
+  // The mask must retain alpha even though the visible world canvas is opaque.
+  const maskCtx = canvas.getContext('2d', { alpha: true });
+  if (!maskCtx) return null;
+  flashlightMaskSurface = { canvas, ctx: maskCtx };
+  return flashlightMaskSurface;
+}
+
+function traceFlashlightCone(
+  ctx: CanvasRenderingContext2D,
+  startX: number,
+  startY: number,
+  angle: number,
+  length: number,
+  spread: number,
+  direction: -1 | 1,
+) {
+  ctx.beginPath();
+  ctx.moveTo(startX, startY);
+  ctx.lineTo(
+    startX + Math.cos(angle - spread) * length * direction,
+    startY + Math.sin(angle - spread) * length,
+  );
+  ctx.lineTo(
+    startX + Math.cos(angle + spread) * length * direction,
+    startY + Math.sin(angle + spread) * length,
+  );
+  ctx.closePath();
+}
+
+function drawFlashlightWarmth(
+  ctx: CanvasRenderingContext2D,
+  startX: number,
+  startY: number,
+  angle: number,
+  length: number,
+  spread: number,
+  direction: -1 | 1,
+) {
+  ctx.save();
+  traceFlashlightCone(
+    ctx,
+    startX,
+    startY,
+    angle,
+    length,
+    spread,
+    direction,
+  );
+  ctx.clip();
+  ctx.globalCompositeOperation = 'screen';
+  const core = ctx.createRadialGradient(
+    startX,
+    startY,
+    2,
+    startX,
+    startY,
+    length * 0.92,
+  );
+  core.addColorStop(0, 'rgba(225,205,163,0.22)');
+  core.addColorStop(0.36, 'rgba(214,190,143,0.15)');
+  core.addColorStop(0.7, 'rgba(201,174,124,0.07)');
+  core.addColorStop(1, 'rgba(201,174,124,0)');
+  ctx.fillStyle = core;
+  ctx.fillRect(0, 0, PIXEL_VIEW_WIDTH, PIXEL_VIEW_HEIGHT);
+  ctx.restore();
+}
+
 function drawFlashlightMask(
   ctx: CanvasRenderingContext2D,
   player: PlayerState,
   mouse: { x: number; y: number },
   channel: SceneRenderChannel,
   pose: PlayerSpritePose,
+  boardId: BoardId,
 ) {
   const playerX = PIXEL_VIEW_WIDTH * 0.42;
-  const direction = mouse.x >= playerX ? 1 : -1;
+  const direction = player.facing;
   const flashlightSocketX =
     getRuntimeAtlasLoadState('player') === 'ready'
       ? 30
@@ -874,37 +994,197 @@ function drawFlashlightMask(
   const startY = PIXEL_FLOOR_Y + pose.flashlightSocket.y;
   const dx = mouse.x - startX;
   const dy = mouse.y - startY;
-  const angle = clamp(Math.atan2(dy, Math.abs(dx)), -0.52, 0.52);
-  const length = 285;
-  const spread = 0.29;
-  ctx.save();
-  ctx.fillStyle = channel === 'pip' ? 'rgba(0,0,0,0.62)' : 'rgba(0,0,0,0.83)';
-  ctx.fillRect(0, 0, PIXEL_VIEW_WIDTH, PIXEL_VIEW_HEIGHT);
-  if (player.flashlightOn && player.battery > 0) {
-    ctx.globalCompositeOperation = 'destination-out';
-    ctx.beginPath();
-    ctx.moveTo(startX, startY);
-    ctx.lineTo(startX + Math.cos(angle - spread) * length * direction, startY + Math.sin(angle - spread) * length);
-    ctx.lineTo(startX + Math.cos(angle + spread) * length * direction, startY + Math.sin(angle + spread) * length);
-    ctx.closePath();
-    ctx.clip();
-    const gradient = ctx.createRadialGradient(startX, startY, 4, startX, startY, length);
-    gradient.addColorStop(0, 'rgba(0,0,0,0.96)');
-    gradient.addColorStop(0.55, 'rgba(0,0,0,0.76)');
-    gradient.addColorStop(0.9, 'rgba(0,0,0,0.22)');
-    gradient.addColorStop(1, 'rgba(0,0,0,0)');
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, PIXEL_VIEW_WIDTH, PIXEL_VIEW_HEIGHT);
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.fillStyle = 'rgba(201,174,124,0.075)';
-    ctx.fillRect(0, 0, PIXEL_VIEW_WIDTH, PIXEL_VIEW_HEIGHT);
+  const angle = Math.atan2(dy, Math.max(0.001, Math.abs(dx)));
+  const length = 305;
+  const spread = 0.34;
+  const flashlightAvailable = player.flashlightOn && player.battery > 0;
+  const blockers = flashlightAvailable
+    ? getNearestForwardBlockers(
+        getSceneDefinitions(boardId).flatMap((scene) => scene.props),
+        player.x,
+        direction,
+        { maxDistance: length + 80, maxCount: 5 },
+      )
+    : [];
+  const surface = getFlashlightMaskSurface();
+
+  if (flashlightAvailable) {
+    // Warm the world albedo first; the alpha mask and blocker shadows are
+    // composited afterwards so occluded regions remain truly dark.
+    drawFlashlightWarmth(
+      ctx,
+      startX,
+      startY,
+      angle,
+      length,
+      spread,
+      direction,
+    );
   }
-  ctx.restore();
+
+  if (surface) {
+    const maskCtx = surface.ctx;
+    maskCtx.save();
+    maskCtx.setTransform(1, 0, 0, 1, 0, 0);
+    maskCtx.globalAlpha = 1;
+    maskCtx.globalCompositeOperation = 'source-over';
+    maskCtx.filter = 'none';
+    maskCtx.clearRect(0, 0, PIXEL_VIEW_WIDTH, PIXEL_VIEW_HEIGHT);
+    maskCtx.fillStyle =
+      channel === 'pip' ? 'rgba(0,0,0,0.60)' : 'rgba(0,0,0,0.88)';
+    maskCtx.fillRect(0, 0, PIXEL_VIEW_WIDTH, PIXEL_VIEW_HEIGHT);
+
+    if (flashlightAvailable) {
+      maskCtx.save();
+      traceFlashlightCone(
+        maskCtx,
+        startX,
+        startY,
+        angle,
+        length,
+        spread,
+        direction,
+      );
+      maskCtx.clip();
+      maskCtx.globalCompositeOperation = 'destination-out';
+      const gradient = maskCtx.createRadialGradient(
+        startX,
+        startY,
+        4,
+        startX,
+        startY,
+        length,
+      );
+      gradient.addColorStop(0, 'rgba(0,0,0,0.99)');
+      gradient.addColorStop(0.42, 'rgba(0,0,0,0.92)');
+      gradient.addColorStop(0.76, 'rgba(0,0,0,0.52)');
+      gradient.addColorStop(0.93, 'rgba(0,0,0,0.18)');
+      gradient.addColorStop(1, 'rgba(0,0,0,0)');
+      maskCtx.fillStyle = gradient;
+      maskCtx.fillRect(0, 0, PIXEL_VIEW_WIDTH, PIXEL_VIEW_HEIGHT);
+      maskCtx.globalCompositeOperation = 'source-over';
+      blockers.forEach((blocker) => {
+        drawFlashlightBlockerShadow(
+          maskCtx,
+          blocker,
+          { x: startX, y: startY },
+          direction,
+        );
+      });
+      maskCtx.restore();
+    }
+    maskCtx.restore();
+    ctx.drawImage(surface.canvas, 0, 0);
+  } else {
+    // Rendering is browser-owned, but a source-over fallback keeps an unusual
+    // non-DOM canvas safe rather than erasing its already-painted world.
+    ctx.save();
+    ctx.fillStyle =
+      channel === 'pip' ? 'rgba(0,0,0,0.60)' : 'rgba(0,0,0,0.88)';
+    ctx.fillRect(0, 0, PIXEL_VIEW_WIDTH, PIXEL_VIEW_HEIGHT);
+    ctx.restore();
+  }
+
+  if (flashlightAvailable) {
+    blockers.forEach((blocker) => {
+      drawFlashlightBlockerHighlight(ctx, blocker, direction);
+    });
+  }
+
   const vignette = ctx.createRadialGradient(PIXEL_VIEW_WIDTH / 2, PIXEL_VIEW_HEIGHT / 2, 70, PIXEL_VIEW_WIDTH / 2, PIXEL_VIEW_HEIGHT / 2, 390);
   vignette.addColorStop(0, 'rgba(0,0,0,0)');
   vignette.addColorStop(1, channel === 'pip' ? 'rgba(0,0,0,0.56)' : 'rgba(0,0,0,0.72)');
   ctx.fillStyle = vignette;
   ctx.fillRect(0, 0, PIXEL_VIEW_WIDTH, PIXEL_VIEW_HEIGHT);
+}
+
+function drawFlashlightBlockerShadow(
+  ctx: CanvasRenderingContext2D,
+  blocker: MainViewFlashlightBlocker,
+  origin: { x: number; y: number },
+  facing: -1 | 1,
+) {
+  const polygon = createShadowPolygon(origin, blocker.bounds, facing);
+  if (polygon.length < 3) return;
+  const shadowAlpha =
+    blocker.profile.kind === 'opaque'
+      ? 0.94
+      : blocker.profile.kind === 'partial'
+        ? 0.52
+        : 0.68;
+  ctx.save();
+  ctx.fillStyle = `rgba(0,0,0,${shadowAlpha})`;
+  ctx.beginPath();
+  ctx.moveTo(polygon[0].x, polygon[0].y);
+  polygon.slice(1).forEach((point) => ctx.lineTo(point.x, point.y));
+  ctx.closePath();
+  ctx.fill();
+
+  const aperture = getBlockerApertureBounds(
+    blocker.bounds,
+    blocker.profile,
+  );
+  if (aperture && blocker.profile.aperture) {
+    const strength = blocker.profile.aperture.transmission;
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.fillStyle = `rgba(0,0,0,${strength})`;
+    ctx.fillRect(aperture.x, aperture.y, Math.max(1, aperture.width), aperture.height);
+    const leakX = facing > 0 ? PIXEL_VIEW_WIDTH : 0;
+    ctx.beginPath();
+    ctx.moveTo(aperture.x, aperture.y);
+    ctx.lineTo(leakX, Math.max(0, aperture.y - 28));
+    ctx.lineTo(leakX, Math.min(PIXEL_VIEW_HEIGHT, aperture.y + aperture.height + 28));
+    ctx.lineTo(aperture.x + aperture.width, aperture.y + aperture.height);
+    ctx.closePath();
+    ctx.fill();
+  } else if (blocker.profile.kind === 'slatted') {
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.fillStyle = `rgba(0,0,0,${blocker.profile.gapRatio ?? 0.24})`;
+    for (let index = 1; index <= 2; index += 1) {
+      const slitY = blocker.bounds.y + blocker.bounds.height * (index / 3);
+      ctx.fillRect(
+        blocker.bounds.x,
+        slitY,
+        blocker.bounds.width,
+        2,
+      );
+    }
+  }
+  ctx.restore();
+}
+
+function drawFlashlightBlockerHighlight(
+  ctx: CanvasRenderingContext2D,
+  blocker: MainViewFlashlightBlocker,
+  facing: -1 | 1,
+) {
+  const nearEdgeX =
+    facing > 0
+      ? blocker.bounds.x
+      : blocker.bounds.x + blocker.bounds.width;
+  ctx.save();
+  ctx.strokeStyle = 'rgba(211,190,146,0.22)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(nearEdgeX, blocker.bounds.y);
+  ctx.lineTo(nearEdgeX, blocker.bounds.y + blocker.bounds.height);
+  ctx.stroke();
+
+  const aperture = getBlockerApertureBounds(
+    blocker.bounds,
+    blocker.profile,
+  );
+  if (aperture && blocker.profile.aperture) {
+    const strength = blocker.profile.aperture.transmission;
+    ctx.fillStyle = `rgba(222,199,151,${0.16 + strength * 0.24})`;
+    ctx.fillRect(
+      aperture.x,
+      aperture.y,
+      Math.max(1, aperture.width),
+      aperture.height,
+    );
+  }
+  ctx.restore();
 }
 
 function drawPixelCharacter(
@@ -987,6 +1267,8 @@ export function renderPixelScene({
   loopCount = 0,
   channel = 'main',
   recordSnapshot = channel === 'main',
+  reducedMotion = false,
+  hidePlayer = false,
 }: PixelSceneInput) {
   if (recordSnapshot) {
     canonicalSceneHistory.record({
@@ -1026,45 +1308,74 @@ export function renderPixelScene({
     channel,
     boardDifferenceActive,
   );
+  anomalies.forEach((anomaly) => {
+    drawAnomaly(
+      ctx,
+      anomaly,
+      player,
+      now,
+      channel,
+      riskTier,
+      loopCount,
+    );
+  });
+  drawForegroundOccluders(
+    ctx,
+    player.x,
+    boardId,
+    channel,
+    boardDifferenceActive,
+  );
+  // Evidence and its interaction prompt remain legible on top of nearby
+  // furniture even though that furniture now correctly covers anomalies.
   items.forEach((item) =>
     drawItem(ctx, item, player.x, now, itemPositions, boardId),
   );
-  anomalies.forEach((anomaly) => {
-    if (anomaly.id === OBSERVER_ANOMALY_ID) return;
-    drawAnomaly(
-      ctx,
-      anomaly,
-      player,
-      now,
-      channel,
-      riskTier,
-      loopCount,
-    );
-  });
-  if (channel === 'main') {
+  if (channel === 'main' && !hidePlayer) {
     drawPixelCharacter(ctx, mouse, spriteInput, player);
   }
-  drawFlashlightMask(ctx, player, mouse, channel, playerPose);
-  anomalies.forEach((anomaly) => {
-    if (anomaly.id !== OBSERVER_ANOMALY_ID) return;
-    drawAnomaly(
-      ctx,
-      anomaly,
-      player,
-      now,
-      channel,
-      riskTier,
-      loopCount,
-    );
-  });
+  drawFlashlightMask(ctx, player, mouse, channel, playerPose, boardId);
+  if (
+    channel === 'main' &&
+    shouldRenderMainBleed(now, riskTier, reducedMotion)
+  ) {
+    drawViewerThreatBleed(ctx, player.facing, riskTier);
+  }
   if (channel === 'main') {
     drawScreenNoise(ctx, now, player.tension);
   }
   ctx.restore();
 }
 
+function drawViewerThreatBleed(
+  ctx: CanvasRenderingContext2D,
+  facing: -1 | 1,
+  riskTier: RiskTier,
+) {
+  const edgeX = facing > 0 ? 4 : PIXEL_VIEW_WIDTH - 4;
+  const inward = facing > 0 ? 1 : -1;
+  ctx.save();
+  ctx.globalAlpha = riskTier >= 3 ? 0.34 : 0.2;
+  ctx.fillStyle = '#030404';
+  ctx.beginPath();
+  ctx.moveTo(edgeX, 108);
+  ctx.lineTo(edgeX + inward * (riskTier >= 3 ? 42 : 25), 132);
+  ctx.lineTo(edgeX + inward * (riskTier >= 3 ? 30 : 17), 229);
+  ctx.lineTo(edgeX, 241);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = '#111210';
+  ctx.fillRect(
+    Math.round(edgeX + inward * (riskTier >= 3 ? 18 : 10)),
+    92,
+    inward * (riskTier >= 3 ? 3 : 2),
+    64,
+  );
+  ctx.restore();
+}
+
 export function renderTitleScene(ctx: CanvasRenderingContext2D, now: number) {
-  const player: PlayerState = { x: 1840, speed: 1.8, isRunning: false, isCrouching: false, flashlightOn: true, flashlightAngle: 0, battery: 82, tension: 32, health: 100 };
+  const player: PlayerState = { x: 1840, speed: 1.8, isRunning: false, isCrouching: false, flashlightOn: true, facing: 1, flashlightAngle: 0, battery: 82, tension: 32, health: 100 };
   const anomalies: Anomaly[] = [{ id: 'title-ghost', x: 2100, width: 55, type: 'ghost', description: 'camera-only apparition', points: 0, captured: false, visibleOnlyInPip: false, yOffset: 0, directorState: { anomalyId: 'title-ghost', phase: 'ACTIVE', resolution: null, phaseStartedAtMs: 0, transitionCount: 1, cycle: 0 } }];
   renderPixelScene({
     ctx,
