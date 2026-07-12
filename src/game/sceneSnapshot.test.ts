@@ -13,6 +13,7 @@ const player = (x: number): PlayerState => ({
   isRunning: false,
   isCrouching: false,
   flashlightOn: true,
+  facing: 1,
   flashlightAngle: 0,
   battery: 100,
   tension: 10,

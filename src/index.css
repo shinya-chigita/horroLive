@@ -452,6 +452,9 @@ textarea:focus-visible,
   height: 100%;
   min-height: 0;
   border: 0;
+  overscroll-behavior: none;
+  touch-action: none;
+  user-select: none;
 }
 
 .playing-world #main-game-viewport > canvas {
@@ -468,10 +471,70 @@ textarea:focus-visible,
   left: max(12px, env(safe-area-inset-left));
 }
 
+.mission-tracker {
+  position: absolute;
+  z-index: 43;
+  top: 44px;
+  left: 12px;
+  width: min(620px, calc(100% - 24px));
+  border-left: 2px solid #6d1b20;
+  background: rgba(2, 3, 2, 0.82);
+  padding: 7px 10px 8px;
+  pointer-events: none;
+}
+
+.mission-spine {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  font-family: var(--font-mono);
+  font-size: 7px;
+  letter-spacing: 0.1em;
+}
+
+.mission-spine span {
+  display: flex;
+  align-items: center;
+  color: #464b46;
+  white-space: nowrap;
+}
+
+.mission-spine span:not(:last-child)::after {
+  width: 18px;
+  height: 1px;
+  margin: 0 6px;
+  background: #282c28;
+  content: "";
+}
+
+.mission-spine span[data-state="done"] {
+  color: #777d76;
+}
+
+.mission-spine span[data-state="done"]::after {
+  background: #555b55;
+}
+
+.mission-spine span[data-state="active"] {
+  color: #bdc0ba;
+}
+
+.mission-tracker strong {
+  display: block;
+  overflow: hidden;
+  margin-top: 5px;
+  color: #9da19b;
+  font-size: 9px;
+  font-weight: 500;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .current-objective {
   position: absolute;
   z-index: 46;
-  top: 12px;
+  top: 92px;
   left: 12px;
   display: flex;
   width: min(680px, calc(100% - 24px));
@@ -480,6 +543,66 @@ textarea:focus-visible,
   border: 1px solid #242824;
   background: rgba(3, 4, 3, 0.93);
   color: #aeb1ab;
+}
+
+.post-live-absence {
+  position: absolute;
+  z-index: 52;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.74);
+  color: #777d76;
+  text-align: center;
+  pointer-events: none;
+}
+
+.post-live-absence::before {
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(255, 255, 255, 0.018) 0,
+    rgba(255, 255, 255, 0.018) 1px,
+    transparent 1px,
+    transparent 4px
+  );
+  content: "";
+}
+
+.post-live-absence p,
+.post-live-absence strong,
+.post-live-absence span {
+  position: relative;
+  margin: 0;
+}
+
+.post-live-absence p {
+  color: #8a2026;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.28em;
+}
+
+.post-live-absence strong {
+  margin-top: 10px;
+  color: #c2c4bf;
+  font-family: var(--font-serif);
+  font-size: clamp(18px, 2.4vw, 30px);
+  letter-spacing: 0.08em;
+}
+
+.post-live-absence span {
+  margin-top: 12px;
+  font-family: var(--font-mono);
+  font-size: 7px;
+  letter-spacing: 0.18em;
+}
+
+.post-live-shell .stream-status-live {
+  animation: live-failure-pulse 0.82s steps(1, end) infinite;
 }
 
 .current-objective > div:first-child {
@@ -707,6 +830,12 @@ textarea:focus-visible,
   0% { opacity: 0; transform: translateY(-14px); }
   12%, 78% { opacity: 1; transform: translateY(0); }
   100% { opacity: 0; transform: translateY(-7px); }
+}
+
+@keyframes live-failure-pulse {
+  0%, 44% { opacity: 1; }
+  45%, 62% { opacity: 0.38; }
+  63%, 100% { opacity: 1; }
 }
 
 @media (max-width: 1179px) {

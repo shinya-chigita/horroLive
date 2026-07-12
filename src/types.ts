@@ -21,6 +21,7 @@ export type GamePhase =
   | 'BOARD_SELECT'
   | 'INTRO_STORY'
   | 'PLAYING'
+  | 'POST_LIVE'
   | 'ENDING'
   | 'GAMEOVER';
 
@@ -136,7 +137,10 @@ export interface PlayerState {
   isRunning: boolean;
   isCrouching: boolean;
   flashlightOn: boolean;
-  flashlightAngle: number; // in radians
+  /** Horizontal direction shared by the character, flashlight and PIP camera. */
+  facing: -1 | 1;
+  /** Vertical pitch in radians. Negative values aim toward the ceiling. */
+  flashlightAngle: number;
   battery: number; // 0 to 100
   tension: number; // 0 to 100 (increases near ghost or if flashlight off)
   health: number; // 0 to 100

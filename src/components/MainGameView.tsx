@@ -29,6 +29,11 @@ import {
   PIXEL_VIEW_WIDTH,
   renderPixelScene,
 } from '../utils/pixelScene';
+import {
+  aimTargetToPoint,
+  pointerToAimTarget,
+  smoothAim,
+} from '../game/aim';
 
 interface MainGameViewProps {
   key?: React.Key;
@@ -58,6 +63,10 @@ interface MainGameViewProps {
     previousPhase: AnomalyDirectorPhase,
   ) => void;
   isPaused?: boolean;
+  climaxActive?: boolean;
+  onExit?: () => void;
+  reducedMotion?: boolean;
+  hidePlayer?: boolean;
 }
 
 const ENGAGED_PHASES: ReadonlySet<AnomalyDirectorPhase> = new Set([
@@ -68,6 +77,11 @@ const ENGAGED_PHASES: ReadonlySet<AnomalyDirectorPhase> = new Set([
   'MISSED',
   'AFTERMATH',
 ]);
+
+const AIM_ORIGIN = {
+  x: PIXEL_VIEW_WIDTH * 0.42,
+  y: 199,
+} as const;
 
 const isTypingTarget = (target: EventTarget | null) => {
   if (!(target instanceof HTMLElement)) return false;
@@ -106,11 +120,21 @@ export default function MainGameView({
   activeWindowMultiplier = 1,
   onAnomalyCue,
   isPaused = false,
+  climaxActive = false,
+  onExit,
+  reducedMotion = false,
+  hidePlayer = false,
 }: MainGameViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const keysPressed = useRef<Record<string, boolean>>({});
   const mousePos = useRef({ x: PIXEL_VIEW_WIDTH * 0.72, y: PIXEL_VIEW_HEIGHT * 0.52 });
+  const actualAimPointRef = useRef(
+    aimTargetToPoint({ facing: player.facing, pitch: player.flashlightAngle }, AIM_ORIGIN),
+  );
+  const activeAimPointerIdRef = useRef<number | null>(null);
+  const pointerAimedRef = useRef(false);
+  const velocityRef = useRef(0);
   const playerRef = useRef(player);
   const itemsRef = useRef(items);
   const anomaliesRef = useRef(anomalies);
@@ -209,6 +233,10 @@ export default function MainGameView({
 
   const handleInspect = () => {
     const currentX = playerRef.current.x;
+    if (climaxActive && currentX >= worldEnd - 180) {
+      onExit?.();
+      return;
+    }
     const itemPositions = getItemWorldPositions(boardId);
     const target = itemsRef.current.find((item) => {
       if (item.found) return false;
@@ -226,7 +254,7 @@ export default function MainGameView({
 
   useEffect(() => {
     inspectRef.current = handleInspect;
-  }, [boardId, items, onAddLog, onPickupItem, player.x]);
+  }, [boardId, climaxActive, items, onAddLog, onExit, onPickupItem, player.x, worldEnd]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -418,6 +446,7 @@ export default function MainGameView({
         const candidate = withRuntime
           .filter((anomaly) => {
             if (anomaly.captured || anomaly.directorState?.phase !== 'DORMANT') return false;
+            if (anomaly.visibleOnlyInPip && riskTierRef.current < 1) return false;
             const definition = getRuntimeDefinition(anomaly);
             return (
               definition.sceneId === currentSceneId &&
@@ -459,11 +488,38 @@ export default function MainGameView({
 
       const current = playerRef.current;
       const direction = left === right ? 0 : left ? -1 : 1;
-      const speed = crouch ? 48 : run ? 192 : 108;
-      const deltaX = direction * speed * dt;
+      const targetSpeed = crouch ? 48 : run ? 192 : 108;
+      const targetVelocity = direction * targetSpeed;
+      const velocityResponse = direction === 0 ? 0.055 : 0.085;
+      const velocityAlpha = 1 - Math.exp(-dt / velocityResponse);
+      let velocity = velocityRef.current +
+        (targetVelocity - velocityRef.current) * velocityAlpha;
+      if (direction === 0 && Math.abs(velocity) < 2) velocity = 0;
+      velocityRef.current = velocity;
+      const deltaX = velocity * dt;
       const nextX = Math.max(0, Math.min(worldEnd, current.x + deltaX));
-      const isRunning = direction !== 0 && run && !crouch;
+      const isRunning = Math.abs(velocity) > 142 && run && !crouch;
       const isCrouching = crouch;
+
+      const pointerTarget = pointerToAimTarget(
+        mousePos.current,
+        AIM_ORIGIN,
+        current.facing,
+      );
+      const movementTarget = {
+        facing: (direction < 0 ? -1 : 1) as PlayerState['facing'],
+        pitch: current.flashlightAngle,
+      };
+      const targetAim =
+        direction !== 0 && !pointerAimedRef.current
+          ? movementTarget
+          : pointerTarget;
+      const nextAim = smoothAim(
+        { facing: current.facing, pitch: current.flashlightAngle },
+        targetAim,
+        dt,
+      );
+      actualAimPointRef.current = aimTargetToPoint(nextAim, AIM_ORIGIN);
 
       if (direction !== 0) {
         footstepDistance += Math.abs(deltaX);
@@ -495,7 +551,7 @@ export default function MainGameView({
         // Let AppV2 resolve gates/checkpoints before the director observes the
         // next scene. A locked boundary may rewind the player this same frame.
         onChapterComplete();
-        return;
+        if (chapterRef.current < chapters.length) return;
       }
 
       advanceRuntime(simulationNowRef.current, nextX);
@@ -519,8 +575,11 @@ export default function MainGameView({
       const next: PlayerState = {
         ...current,
         x: nextX,
+        speed: Math.abs(velocity),
         isRunning,
         isCrouching,
+        facing: nextAim.facing,
+        flashlightAngle: nextAim.pitch,
         battery: nextBattery,
         tension: nextTension,
       };
@@ -570,23 +629,31 @@ export default function MainGameView({
         player: playerRef.current,
         anomalies: anomaliesRef.current,
         items: itemsRef.current,
-        mouse: mousePos.current,
+        mouse: actualAimPointRef.current,
         now,
         isMoving: moving,
         boardId,
         riskTier: riskTierRef.current,
         loopCount: loopCountRef.current,
+        reducedMotion,
+        hidePlayer,
       });
     };
 
     animationId = window.requestAnimationFrame(render);
     return () => window.cancelAnimationFrame(animationId);
-  }, [boardId]);
+  }, [boardId, hidePlayer, reducedMotion]);
 
   const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
     if (
       event.target instanceof Element &&
       event.target.closest('.mobile-game-controls')
+    ) {
+      return;
+    }
+    if (
+      event.pointerType !== 'mouse' &&
+      activeAimPointerIdRef.current !== event.pointerId
     ) {
       return;
     }
@@ -615,6 +682,28 @@ export default function MainGameView({
       x: localX / scale,
       y: localY / scale,
     };
+    pointerAimedRef.current = true;
+  };
+
+  const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (
+      event.target instanceof Element &&
+      event.target.closest('.mobile-game-controls')
+    ) {
+      return;
+    }
+    activeAimPointerIdRef.current = event.pointerId;
+    handlePointerMove(event);
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    containerRef.current?.focus();
+  };
+
+  const handlePointerEnd = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (activeAimPointerIdRef.current !== event.pointerId) return;
+    if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    activeAimPointerIdRef.current = null;
   };
 
   const holdKey = (key: string, value: boolean) => (event: React.PointerEvent<HTMLButtonElement>) => {
@@ -649,7 +738,10 @@ export default function MainGameView({
         }
       }}
       onClick={() => containerRef.current?.focus()}
+      onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerEnd}
+      onPointerCancel={handlePointerEnd}
       className="screen-frame relative isolate w-full overflow-hidden border border-white/10 bg-black outline-none transition-colors focus:border-stone-500/55"
       aria-label={`${boardLabel}探索画面`}
     >
