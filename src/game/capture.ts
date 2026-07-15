@@ -57,6 +57,19 @@ export interface CameraCaptureTarget {
   projection?: CameraTargetProjection;
 }
 
+/** Live battery state overrides a delayed PIP frame for every capture path. */
+export function normalizeCaptureTargetForBattery(
+  target: CameraCaptureTarget | null,
+  currentBattery: number,
+): CameraCaptureTarget | null {
+  if (!target || currentBattery > 0) return target;
+  return {
+    ...target,
+    canCapture: false,
+    reason: 'BATTERY_EMPTY',
+  };
+}
+
 export interface CameraTargetProjection {
   centerX: number;
   centerY: number;

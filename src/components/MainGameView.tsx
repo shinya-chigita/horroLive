@@ -37,6 +37,10 @@ import {
 import { getViewerThreatTensionFloor } from '../game/viewerThreat';
 import { selectPrototypeScareType } from '../game/improvementPrototype';
 import { applyScareTension } from '../game/tension';
+import {
+  GAMEPLAY_INTERACTIVE_SELECTOR,
+  shouldHandleGameplayHotkey,
+} from '../game/gameplayInput';
 
 interface MainGameViewProps {
   key?: React.Key;
@@ -88,11 +92,9 @@ const AIM_ORIGIN = {
   y: 199,
 } as const;
 
-const isTypingTarget = (target: EventTarget | null) => {
-  if (!(target instanceof HTMLElement)) return false;
-  const tag = target.tagName.toLowerCase();
-  return tag === 'input' || tag === 'textarea' || target.isContentEditable;
-};
+const isInteractiveTarget = (target: EventTarget | null) =>
+  target instanceof Element &&
+  target.closest(GAMEPLAY_INTERACTIVE_SELECTOR) !== null;
 
 const setPressed = (
   keys: React.MutableRefObject<Record<string, boolean>>,
@@ -156,7 +158,7 @@ export default function MainGameView({
   const loopCountRef = useRef(loopCount);
   const chaseActiveRef = useRef(chaseActive);
   const pendingScareRef = useRef<'jumpscare' | 'chase' | 'whisper' | null>(null);
-  const [isFocused, setIsFocused] = useState(false);
+  const [isViewportFocused, setIsViewportFocused] = useState(false);
 
   useEffect(() => {
     playerRef.current = player;
@@ -271,8 +273,16 @@ export default function MainGameView({
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (pausedRef.current) return;
-      if (isTypingTarget(event.target)) return;
+      if (
+        !shouldHandleGameplayHotkey({
+          paused: pausedRef.current,
+          viewportFocused:
+            containerRef.current?.contains(document.activeElement) ?? false,
+          interactiveTarget: isInteractiveTarget(event.target),
+        })
+      ) {
+        return;
+      }
       const key = event.key.toLowerCase();
       setPressed(keysPressed, key, true);
 
@@ -329,6 +339,10 @@ export default function MainGameView({
     let animationId = 0;
     let previousAt = performance.now();
     let footstepDistance = 0;
+    const rebaseAnimationClock = () => {
+      previousAt = performance.now();
+    };
+    document.addEventListener('visibilitychange', rebaseAnimationClock);
 
     const getRuntimeDefinition = (anomaly: Anomaly) => {
       const fallbackSceneId =
@@ -490,7 +504,10 @@ export default function MainGameView({
 
     const tick = (now: number) => {
       animationId = window.requestAnimationFrame(tick);
-      if (pausedRef.current) {
+      if (
+        pausedRef.current ||
+        document.visibilityState !== 'visible'
+      ) {
         previousAt = now;
         return;
       }
@@ -628,7 +645,10 @@ export default function MainGameView({
     };
 
     animationId = window.requestAnimationFrame(tick);
-    return () => window.cancelAnimationFrame(animationId);
+    return () => {
+      window.cancelAnimationFrame(animationId);
+      document.removeEventListener('visibilitychange', rebaseAnimationClock);
+    };
   }, [
     activeWindowMultiplier,
     batteryDrainMultiplier,
@@ -733,6 +753,7 @@ export default function MainGameView({
     ) {
       return;
     }
+    setIsViewportFocused(true);
     activeAimPointerIdRef.current = event.pointerId;
     handlePointerMove(event);
     event.currentTarget.setPointerCapture?.(event.pointerId);
@@ -771,10 +792,10 @@ export default function MainGameView({
       id="main-game-viewport"
       ref={containerRef}
       tabIndex={0}
-      onFocus={() => setIsFocused(true)}
+      onFocus={() => setIsViewportFocused(true)}
       onBlur={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-          setIsFocused(false);
+          setIsViewportFocused(false);
           clearKeys();
         }
       }}
@@ -805,7 +826,7 @@ export default function MainGameView({
         pos {Math.round(player.x).toString().padStart(4, '0')} / {worldEnd}
       </div>
 
-      {!isFocused && (
+      {!isViewportFocused && (
         <div className="absolute inset-0 z-30 flex cursor-pointer flex-col items-center justify-center bg-black/76 px-6 text-center backdrop-blur-[1px]">
           <div className="mb-4 h-9 w-9 border border-stone-500/50 p-2">
             <div className="h-full w-full bg-red-800/70" />

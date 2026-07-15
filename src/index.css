@@ -1129,15 +1129,15 @@ textarea:focus-visible,
     margin-right: 0;
   }
 
+  .mission-tracker.objective-open {
+    display: none;
+  }
+
   .current-objective strong {
     white-space: normal;
   }
 
   .objective-evidence {
-    display: none;
-  }
-
-  .current-objective button {
     display: none;
   }
 
