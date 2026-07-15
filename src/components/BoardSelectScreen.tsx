@@ -32,6 +32,7 @@ export interface BoardSelectScreenProps {
   onSelectBoard: (boardId: BoardId) => void;
   onSelectMode: (mode: RunMode) => void;
   onStart: () => void;
+  onStartPrototype: () => void;
   onBack: () => void;
 }
 
@@ -198,6 +199,7 @@ export default function BoardSelectScreen({
   onSelectBoard,
   onSelectMode,
   onStart,
+  onStartPrototype,
   onBack,
 }: BoardSelectScreenProps) {
   const selectedBoard = getBoardDefinition(selectedBoardId);
@@ -354,6 +356,29 @@ export default function BoardSelectScreen({
           </section>
 
           <aside className="border border-white/10 bg-[#080808]/95 lg:sticky lg:top-8" aria-labelledby="mode-heading">
+            <div className="border-b border-red-950/80 bg-red-950/10 p-4 sm:p-5">
+              <div className="flex items-center gap-2 font-mono text-[8px] uppercase tracking-[0.16em] text-red-700">
+                <Radio className="h-3 w-3" aria-hidden="true" /> quality gate 2
+              </div>
+              <h2 className="mt-2 text-sm font-semibold tracking-[0.08em] text-zinc-200">
+                改善プロトタイプ
+              </h2>
+              <p className="mt-2 text-[9px] leading-relaxed text-zinc-600">
+                病院STANDARDの固定検証経路。撮影→同接上昇→追跡→脱出→LIVE残留を3〜5分で確認する。
+              </p>
+              <button
+                type="button"
+                onClick={onStartPrototype}
+                className="mt-4 flex w-full items-center justify-between border border-red-900/80 bg-red-950/35 px-4 py-3 text-left transition-colors hover:border-red-700 hover:bg-red-950/50"
+              >
+                <span>
+                  <span className="block font-mono text-[7px] uppercase tracking-[0.16em] text-red-700">required route / 180–300 sec</span>
+                  <span className="mt-1 block text-[11px] font-semibold tracking-[0.1em] text-zinc-100">品質ゲート用ビルドを開始</span>
+                </span>
+                <ChevronRight className="h-4 w-4 text-red-800" aria-hidden="true" />
+              </button>
+            </div>
+
             <div className="border-b border-white/10 p-4 sm:p-5">
               <p className="font-mono text-[8px] uppercase tracking-[0.16em] text-zinc-700">02 / broadcast condition</p>
               <h2 id="mode-heading" className="mt-1 text-xs font-semibold tracking-[0.09em] text-zinc-300">

@@ -4,8 +4,17 @@ import {
   createSyntheticThreatCaptureTarget,
   getViewerThreatCameraPresentation,
   getViewerThreatProfile,
+  getViewerThreatTensionFloor,
   shouldRenderMainBleed,
 } from './viewerThreat.ts';
+
+test('viewer growth raises the persistent tension floor without becoming lethal alone', () => {
+  assert.deepEqual(
+    ([0, 1, 2, 3] as const).map(getViewerThreatTensionFloor),
+    [9, 18, 32, 48],
+  );
+  assert.ok(getViewerThreatTensionFloor(3) < 92);
+});
 
 const camera = (
   overrides: Partial<{

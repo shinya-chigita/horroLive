@@ -62,6 +62,7 @@ export interface PipCameraV2Props {
   reducedMotion?: boolean;
   isPaused?: boolean;
   climaxActive?: boolean;
+  subtleCaptureFeedback?: boolean;
 }
 
 interface FeedMetadata {
@@ -130,6 +131,7 @@ function PipCameraV2({
   reducedMotion = false,
   isPaused = false,
   climaxActive = false,
+  subtleCaptureFeedback = false,
 }: PipCameraV2Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const loopCountRef = useRef(loopCount);
@@ -632,7 +634,20 @@ function PipCameraV2({
           {captureReady ? 'capture' : 'focus'}
         </span>
       </button>
-      {captureFeedback && (
+      {captureFeedback && subtleCaptureFeedback && (
+        <div className="pointer-events-none absolute inset-x-3 top-3 z-30 flex justify-center">
+          <span
+            className={`border bg-black/92 px-4 py-2 font-mono text-[8px] font-semibold tracking-[0.2em] ${
+              captureFeedback === 'RECORDED'
+                ? 'border-emerald-900/80 text-emerald-300'
+                : 'border-red-900/80 text-red-300'
+            }`}
+          >
+            {captureFeedback}
+          </span>
+        </div>
+      )}
+      {captureFeedback && !subtleCaptureFeedback && (
         <div className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center bg-white/75 mix-blend-screen">
           <span className="border border-black bg-black px-4 py-2 font-mono text-[8px] font-semibold tracking-[0.2em] text-white">
             {captureFeedback}

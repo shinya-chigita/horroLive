@@ -34,6 +34,9 @@ import {
   pointerToAimTarget,
   smoothAim,
 } from '../game/aim';
+import { getViewerThreatTensionFloor } from '../game/viewerThreat';
+import { selectPrototypeScareType } from '../game/improvementPrototype';
+import { applyScareTension } from '../game/tension';
 
 interface MainGameViewProps {
   key?: React.Key;
@@ -67,6 +70,8 @@ interface MainGameViewProps {
   onExit?: () => void;
   reducedMotion?: boolean;
   hidePlayer?: boolean;
+  improvementPrototype?: boolean;
+  chaseActive?: boolean;
 }
 
 const ENGAGED_PHASES: ReadonlySet<AnomalyDirectorPhase> = new Set([
@@ -124,6 +129,8 @@ export default function MainGameView({
   onExit,
   reducedMotion = false,
   hidePlayer = false,
+  improvementPrototype = false,
+  chaseActive = false,
 }: MainGameViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -147,6 +154,8 @@ export default function MainGameView({
   const pausedRef = useRef(isPaused);
   const riskTierRef = useRef(riskTier);
   const loopCountRef = useRef(loopCount);
+  const chaseActiveRef = useRef(chaseActive);
+  const pendingScareRef = useRef<'jumpscare' | 'chase' | 'whisper' | null>(null);
   const [isFocused, setIsFocused] = useState(false);
 
   useEffect(() => {
@@ -168,6 +177,10 @@ export default function MainGameView({
   useEffect(() => {
     loopCountRef.current = loopCount;
   }, [loopCount]);
+
+  useEffect(() => {
+    chaseActiveRef.current = chaseActive;
+  }, [chaseActive]);
 
   useEffect(() => {
     let needsParentSync = false;
@@ -349,12 +362,20 @@ export default function MainGameView({
         case 'ACTIVE':
           onAddLog(`【異常検知】${anomaly.description}。今なら記録できる。`);
           onAnomalyCue?.(anomaly, next.phase, previous.phase);
-          onTriggerScare(
-            chapterRef.current === chapters.length &&
-              anomaly.x >= worldEnd - 600
-              ? 'jumpscare'
-              : 'whisper',
-          );
+          {
+            const scareType = selectPrototypeScareType({
+              improvementPrototype,
+              anomalyX: anomaly.x,
+              worldEnd,
+              currentChapterId: chapterRef.current,
+              totalChapters: chapters.length,
+            });
+            // The previous parent setState was overwritten later in this RAF.
+            // Queue the authored scare here so both existing runs and the
+            // prototype apply the intended tension change exactly once.
+            pendingScareRef.current = scareType;
+            onTriggerScare(scareType);
+          }
           break;
         case 'IGNORED':
           onAddLog(`【見送り】${anomaly.description}を記録せず、その場を離れた。`);
@@ -551,7 +572,7 @@ export default function MainGameView({
         // Let AppV2 resolve gates/checkpoints before the director observes the
         // next scene. A locked boundary may rewind the player this same frame.
         onChapterComplete();
-        if (chapterRef.current < chapters.length) return;
+        return;
       }
 
       advanceRuntime(simulationNowRef.current, nextX);
@@ -563,13 +584,31 @@ export default function MainGameView({
         }
       }
 
-      let targetTension = 9;
+      let targetTension = improvementPrototype
+        ? getViewerThreatTensionFloor(riskTierRef.current)
+        : 9;
       if (nearestDistance < 640) {
-        targetTension = 9 + ((640 - nearestDistance) / 640) * 82;
+        targetTension = Math.max(
+          targetTension,
+          9 + ((640 - nearestDistance) / 640) * 82,
+        );
       }
       if (!current.flashlightOn && nextX > 1100) targetTension = Math.min(100, targetTension * 1.48);
       if (isRunning && nearestDistance < 420) targetTension = Math.min(100, targetTension + 7);
-      const nextTension = current.tension + (targetTension - current.tension) * Math.min(1, dt * 3.6);
+      if (chaseActiveRef.current) {
+        targetTension = Math.max(targetTension, Math.abs(velocity) < 72 ? 100 : 96);
+      }
+      let nextTension = current.tension +
+        (targetTension - current.tension) * Math.min(1, dt * 3.6);
+      const pendingScare = pendingScareRef.current;
+      pendingScareRef.current = null;
+      if (pendingScare) {
+        nextTension = applyScareTension(
+          nextTension,
+          pendingScare,
+          reducedMotion,
+        );
+      }
       AudioSynth.updateTension(nextTension);
 
       const next: PlayerState = {
@@ -595,10 +634,12 @@ export default function MainGameView({
     batteryDrainMultiplier,
     boardId,
     chapters,
+    improvementPrototype,
     onAddLog,
     onAnomalyCue,
     onChapterComplete,
     onTriggerScare,
+    reducedMotion,
     setPlayer,
     telegraphDurationMultiplier,
     worldEnd,
