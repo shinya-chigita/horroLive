@@ -233,6 +233,7 @@ function PipCameraV2({
     let frozenUntil = 0;
     let focusBlurUntil = 0;
     let pausedAt: number | null = null;
+    let hasRenderedFrame = false;
     const firedCameraEffects = new Set<string>();
     const phaseByAnomaly = new Map<string, AnomalyDirectorPhase>();
     canonicalFallbackRef.current.anomalies?.forEach((anomaly) => {
@@ -270,14 +271,16 @@ function PipCameraV2({
     const render = (now: number) => {
       animationId = window.requestAnimationFrame(render);
       const metadata = feedRef.current;
-      if (
-        metadata.isPaused ||
-        document.visibilityState !== 'visible'
-      ) {
+      if (document.visibilityState !== 'visible') {
         if (pausedAt === null) pausedAt = now;
         return;
       }
-      if (pausedAt !== null) {
+      if (metadata.isPaused) {
+        if (pausedAt === null) pausedAt = now;
+        // The armed entry needs one truthful still frame, but no live-feed time may
+        // advance until the player actually begins or restores gameplay focus.
+        if (hasRenderedFrame) return;
+      } else if (pausedAt !== null) {
         resumeFromPause(now);
       }
 
@@ -477,6 +480,7 @@ function PipCameraV2({
       }
 
       ctx.restore();
+      hasRenderedFrame = true;
     };
 
     animationId = window.requestAnimationFrame(render);

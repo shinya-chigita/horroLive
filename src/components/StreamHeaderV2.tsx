@@ -33,6 +33,7 @@ interface StreamHeaderV2Props {
   onOpenChat?: () => void;
   onShowObjective?: () => void;
   isInert?: boolean;
+  isPaused?: boolean;
 }
 
 const clamp = (value: number) => Math.max(0, Math.min(100, value));
@@ -53,13 +54,15 @@ function StreamHeaderV2({
   onOpenChat,
   onShowObjective,
   isInert = false,
+  isPaused = false,
 }: StreamHeaderV2Props) {
   const [elapsed, setElapsed] = useState(0);
 
   useEffect(() => {
+    if (isPaused) return undefined;
     const timer = window.setInterval(() => setElapsed((previous) => previous + 1), 1000);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [isPaused]);
 
   const hours = Math.floor(elapsed / 3600).toString().padStart(2, '0');
   const minutes = Math.floor((elapsed % 3600) / 60).toString().padStart(2, '0');

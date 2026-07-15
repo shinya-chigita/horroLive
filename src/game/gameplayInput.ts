@@ -18,6 +18,39 @@ export interface GameplayHotkeyContext {
   interactiveTarget: boolean;
 }
 
+const GAMEPLAY_START_KEYS = new Set([
+  'a',
+  'd',
+  's',
+  'arrowleft',
+  'arrowright',
+  'arrowdown',
+  'shift',
+  'control',
+  'f',
+  'e',
+  ' ',
+]);
+
+export interface GameplayFirstKeyContext {
+  awaitingFirstInput: boolean;
+  viewportFocused: boolean;
+  interactiveTarget: boolean;
+  key: string;
+}
+
+/** Start an armed run only from a gameplay key inside Main, never from Tab or UI controls. */
+export function shouldBeginGameplayFromKey(
+  context: GameplayFirstKeyContext,
+): boolean {
+  return (
+    context.awaitingFirstInput &&
+    context.viewportFocused &&
+    !context.interactiveTarget &&
+    GAMEPLAY_START_KEYS.has(context.key.toLowerCase())
+  );
+}
+
 /** Keep gameplay shortcuts inside the activated Main viewport. */
 export function shouldHandleGameplayHotkey(
   context: GameplayHotkeyContext,

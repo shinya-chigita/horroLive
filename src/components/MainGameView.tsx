@@ -39,6 +39,7 @@ import { selectPrototypeScareType } from '../game/improvementPrototype';
 import { applyScareTension } from '../game/tension';
 import {
   GAMEPLAY_INTERACTIVE_SELECTOR,
+  shouldBeginGameplayFromKey,
   shouldHandleGameplayHotkey,
 } from '../game/gameplayInput';
 
@@ -76,6 +77,10 @@ interface MainGameViewProps {
   hidePlayer?: boolean;
   improvementPrototype?: boolean;
   chaseActive?: boolean;
+  awaitingFirstInput?: boolean;
+  onFirstInput?: () => void;
+  showFocusPrompt?: boolean;
+  onFocusChange?: (focused: boolean) => void;
 }
 
 const ENGAGED_PHASES: ReadonlySet<AnomalyDirectorPhase> = new Set([
@@ -133,6 +138,10 @@ export default function MainGameView({
   hidePlayer = false,
   improvementPrototype = false,
   chaseActive = false,
+  awaitingFirstInput = false,
+  onFirstInput,
+  showFocusPrompt = true,
+  onFocusChange,
 }: MainGameViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -154,6 +163,8 @@ export default function MainGameView({
   const inspectRef = useRef<() => void>(() => undefined);
   const captureRef = useRef(onCaptureAnomaly);
   const pausedRef = useRef(isPaused);
+  const awaitingFirstInputRef = useRef(awaitingFirstInput);
+  const onFirstInputRef = useRef(onFirstInput);
   const riskTierRef = useRef(riskTier);
   const loopCountRef = useRef(loopCount);
   const chaseActiveRef = useRef(chaseActive);
@@ -238,12 +249,33 @@ export default function MainGameView({
   }, [onCaptureAnomaly]);
 
   useEffect(() => {
+    awaitingFirstInputRef.current = awaitingFirstInput;
+  }, [awaitingFirstInput]);
+
+  useEffect(() => {
+    onFirstInputRef.current = onFirstInput;
+  }, [onFirstInput]);
+
+  useEffect(() => {
     pausedRef.current = isPaused;
     if (isPaused) clearKeys();
   }, [isPaused]);
 
   const clearKeys = () => {
     keysPressed.current = {};
+  };
+
+  const beginFirstInput = () => {
+    if (!awaitingFirstInputRef.current) return;
+    awaitingFirstInputRef.current = false;
+    pausedRef.current = false;
+    onFirstInputRef.current?.();
+  };
+
+  const activateViewport = () => {
+    beginFirstInput();
+    setIsViewportFocused(true);
+    containerRef.current?.focus({ preventScroll: true });
   };
 
   const handleInspect = () => {
@@ -273,16 +305,25 @@ export default function MainGameView({
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (
+      const viewportFocused =
+        containerRef.current?.contains(document.activeElement) ?? false;
+      const interactiveTarget = isInteractiveTarget(event.target);
+      const beginsGameplay = shouldBeginGameplayFromKey({
+        awaitingFirstInput: awaitingFirstInputRef.current,
+        viewportFocused,
+        interactiveTarget,
+        key: event.key,
+      });
+      if (!beginsGameplay &&
         !shouldHandleGameplayHotkey({
           paused: pausedRef.current,
-          viewportFocused:
-            containerRef.current?.contains(document.activeElement) ?? false,
-          interactiveTarget: isInteractiveTarget(event.target),
+          viewportFocused,
+          interactiveTarget,
         })
       ) {
         return;
       }
+      if (beginsGameplay) beginFirstInput();
       const key = event.key.toLowerCase();
       setPressed(keysPressed, key, true);
 
@@ -720,6 +761,9 @@ export default function MainGameView({
     }
     const canvas = canvasRef.current;
     if (!canvas) return;
+    if (event.pointerType === 'mouse' && awaitingFirstInputRef.current) {
+      activateViewport();
+    }
     const rect = canvas.getBoundingClientRect();
     const fit = window.getComputedStyle(canvas).objectFit;
     const scaleForWidth = rect.width / PIXEL_VIEW_WIDTH;
@@ -753,7 +797,7 @@ export default function MainGameView({
     ) {
       return;
     }
-    setIsViewportFocused(true);
+    activateViewport();
     activeAimPointerIdRef.current = event.pointerId;
     handlePointerMove(event);
     event.currentTarget.setPointerCapture?.(event.pointerId);
@@ -771,6 +815,9 @@ export default function MainGameView({
   const holdKey = (key: string, value: boolean) => (event: React.PointerEvent<HTMLButtonElement>) => {
     event.preventDefault();
     event.stopPropagation();
+    if (value) {
+      activateViewport();
+    }
     setPressed(keysPressed, key, value);
     if (value) event.currentTarget.setPointerCapture?.(event.pointerId);
   };
@@ -778,6 +825,7 @@ export default function MainGameView({
   const toggleFlashlight = (event: React.MouseEvent<HTMLButtonElement>) => {
     event.preventDefault();
     event.stopPropagation();
+    activateViewport();
     setPlayer((previous) => {
       if (previous.battery <= 0 && !previous.flashlightOn) return previous;
       AudioSynth.playFlashlightClick();
@@ -792,10 +840,14 @@ export default function MainGameView({
       id="main-game-viewport"
       ref={containerRef}
       tabIndex={0}
-      onFocus={() => setIsViewportFocused(true)}
+      onFocus={() => {
+        setIsViewportFocused(true);
+        onFocusChange?.(true);
+      }}
       onBlur={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
           setIsViewportFocused(false);
+          onFocusChange?.(false);
           clearKeys();
         }
       }}
@@ -826,7 +878,7 @@ export default function MainGameView({
         pos {Math.round(player.x).toString().padStart(4, '0')} / {worldEnd}
       </div>
 
-      {!isViewportFocused && (
+      {showFocusPrompt && !isViewportFocused && (
         <div className="absolute inset-0 z-30 flex cursor-pointer flex-col items-center justify-center bg-black/76 px-6 text-center backdrop-blur-[1px]">
           <div className="mb-4 h-9 w-9 border border-stone-500/50 p-2">
             <div className="h-full w-full bg-red-800/70" />
@@ -848,7 +900,7 @@ export default function MainGameView({
           ['E', '調査'],
           ['SPACE', '撮影'],
         ].map(([key, label]) => (
-          <div key={key} className="border border-white/10 bg-black/68 px-2 py-1 font-mono text-[7px] uppercase tracking-[0.08em] text-zinc-600">
+          <div key={key} className="border border-white/10 bg-black/68 px-2 py-1 font-mono text-[11px] uppercase tracking-[0.05em] text-zinc-500">
             <span className="text-zinc-300">{key}</span> {label}
           </div>
         ))}
@@ -880,7 +932,7 @@ export default function MainGameView({
           </button>
         </div>
 
-        <div className="flex gap-1.5">
+        <div className="flex gap-2">
           <button
             type="button"
             onPointerDown={holdKey('shift', true)}
@@ -890,7 +942,7 @@ export default function MainGameView({
             className="flex h-11 min-w-11 items-center justify-center border border-white/12 bg-black/76 px-2 text-zinc-400 active:text-white"
             aria-label="走る"
           >
-            <Zap className="h-3.5 w-3.5" />
+            <Zap className="h-4 w-4" />
           </button>
           <button
             type="button"
@@ -898,29 +950,31 @@ export default function MainGameView({
             className="flex h-11 min-w-11 items-center justify-center border border-white/12 bg-black/76 px-2 text-zinc-400 active:text-white"
             aria-label="懐中電灯を切り替える"
           >
-            <Flashlight className="h-3.5 w-3.5" />
+            <Flashlight className="h-4 w-4" />
           </button>
           <button
             type="button"
             onClick={(event) => {
               event.stopPropagation();
+              activateViewport();
               handleInspect();
             }}
             className="flex h-11 min-w-11 items-center justify-center border border-white/12 bg-black/76 px-2 text-zinc-400 active:text-white"
             aria-label="調べる"
           >
-            <Search className="h-3.5 w-3.5" />
+            <Search className="h-4 w-4" />
           </button>
           <button
             type="button"
             onClick={(event) => {
               event.stopPropagation();
+              activateViewport();
               captureRef.current();
             }}
             className="flex h-11 min-w-11 items-center justify-center border border-red-900/50 bg-red-950/50 px-2 text-red-300 active:bg-red-900/70"
             aria-label="撮影する"
           >
-            <Camera className="h-3.5 w-3.5" />
+            <Camera className="h-4 w-4" />
           </button>
         </div>
       </div>
