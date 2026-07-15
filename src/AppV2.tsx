@@ -80,12 +80,14 @@ import { evaluateRoute } from './game/route';
 import { getItemWorldPositions } from './game/sceneDefinitions';
 import {
   createImprovementPrototypeBoard,
+  createImprovementPrototypeComments,
   evaluateImprovementPrototypeDuration,
   evaluateImprovementPrototypeGate,
   getResolvedCaptureFailureCopy,
   hasCompleteImprovementPrototypeSequence,
   IMPROVEMENT_PROTOTYPE_REQUIRED_CAPTURES,
   measurePrototypeActiveFrame,
+  shouldPublishPrototypeComment,
   type ImprovementPrototypeDurationBand,
 } from './game/improvementPrototype';
 import { getViewerThreatProfile } from './game/viewerThreat';
@@ -241,6 +243,9 @@ export default function AppV2() {
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [isPageHidden, setIsPageHidden] = useState(false);
   const [isRotateHintDismissed, setIsRotateHintDismissed] = useState(false);
+  const [isGameplayReady, setIsGameplayReady] = useState(false);
+  const [isGameplaySurfaceFocused, setIsGameplaySurfaceFocused] = useState(false);
+  const [isWindowFocused, setIsWindowFocused] = useState(() => document.hasFocus());
   const [isCompactViewport, setIsCompactViewport] = useState(() =>
     mediaMatches('(max-width: 1179px)'),
   );
@@ -280,15 +285,29 @@ export default function AppV2() {
   const riskTier = viewerRisk.tier;
   const shouldShowRotateHint =
     phase === 'PLAYING' && isPortraitGameplay && !isRotateHintDismissed;
+  const isAwaitingGameplayReady =
+    phase === 'PLAYING' && isImprovementPrototype && !isGameplayReady;
+  const isPrototypeInputPaused =
+    phase === 'PLAYING' &&
+    isImprovementPrototype &&
+    isGameplayReady &&
+    (!isGameplaySurfaceFocused || !isWindowFocused);
   const isInterfacePaused =
     phase === 'POST_LIVE' ||
     isJournalOpen ||
     isChatOpen ||
     isPageHidden ||
-    shouldShowRotateHint;
+    shouldShowRotateHint ||
+    isAwaitingGameplayReady ||
+    isPrototypeInputPaused;
   const isBroadcastPaused =
     phase === 'PLAYING' &&
-    (isJournalOpen || isChatOpen || isPageHidden || shouldShowRotateHint);
+    (isJournalOpen ||
+      isChatOpen ||
+      isPageHidden ||
+      shouldShowRotateHint ||
+      isAwaitingGameplayReady ||
+      isPrototypeInputPaused);
 
   const playerRef = useRef(player);
   const phaseRef = useRef(phase);
@@ -462,6 +481,15 @@ export default function AppV2() {
 
   const pushComment = useCallback(
     (comment: Omit<Comment, 'id' | 'timestamp'>) => {
+      if (
+        isImprovementPrototypeRef.current &&
+        !shouldPublishPrototypeComment(
+          prototypeActiveElapsedRef.current,
+          comment.type,
+        )
+      ) {
+        return;
+      }
       setComments((previous) => [
         // Keep the session transcript intact. LiveChat virtualises the visible
         // window while following; retaining rows prevents paused reading from
@@ -808,14 +836,20 @@ export default function AppV2() {
   }, [handleAddLog, isInterfacePaused, phase, player.battery, player.flashlightOn, pushComment]);
 
   useEffect(() => {
-    if (phase !== 'PLAYING') return undefined;
+    if (
+      phase !== 'PLAYING' ||
+      (isImprovementPrototype && isInterfacePaused)
+    ) {
+      setShowChapterCard(false);
+      return undefined;
+    }
     setShowChapterCard(true);
     const timer = window.setTimeout(
       () => setShowChapterCard(false),
       prefersReducedMotion ? 900 : 1800,
     );
     return () => window.clearTimeout(timer);
-  }, [chapterId, phase, prefersReducedMotion]);
+  }, [chapterId, isImprovementPrototype, isInterfacePaused, phase, prefersReducedMotion]);
 
   useEffect(() => {
     if (phase !== 'PLAYING') {
@@ -842,13 +876,30 @@ export default function AppV2() {
     return () => window.clearTimeout(timer);
   }, [isImprovementPrototype, phase]);
 
+  const focusMainViewport = useCallback(() => {
+    window.requestAnimationFrame(() => {
+      document.getElementById('main-game-viewport')?.focus({ preventScroll: true });
+    });
+  }, []);
+
   const handleToggleMute = useCallback(() => {
     setIsMuted((previous) => {
       const next = !previous;
       AudioSynth.setMuted(next);
       return next;
     });
-  }, []);
+    if (isImprovementPrototype) focusMainViewport();
+  }, [focusMainViewport, isImprovementPrototype]);
+
+  const showCurrentObjective = useCallback(() => {
+    setShowObjective(true);
+    if (isImprovementPrototype) focusMainViewport();
+  }, [focusMainViewport, isImprovementPrototype]);
+
+  const hideCurrentObjective = useCallback(() => {
+    setShowObjective(false);
+    if (isImprovementPrototype) focusMainViewport();
+  }, [focusMainViewport, isImprovementPrototype]);
 
   const suspendPlayerInput = useCallback(() => {
     setPlayer((previous) => ({
@@ -864,14 +915,17 @@ export default function AppV2() {
       returnFocusRef.current = null;
       window.requestAnimationFrame(() => {
         const fallback = document.getElementById('main-game-viewport');
-        const target =
-          requestedTarget?.isConnected && requestedTarget.getClientRects().length > 0
+        const requestedTargetIsUsable =
+          requestedTarget?.isConnected && requestedTarget.getClientRects().length > 0;
+        const target = isImprovementPrototype
+          ? fallback ?? (requestedTargetIsUsable ? requestedTarget : null)
+          : requestedTargetIsUsable
             ? requestedTarget
             : fallback;
         target?.focus({ preventScroll: true });
       });
     },
-    [],
+    [isImprovementPrototype],
   );
 
   const closeJournal = useCallback(() => {
@@ -908,6 +962,65 @@ export default function AppV2() {
       document.getElementById('main-game-viewport')?.focus({ preventScroll: true });
     });
   }, []);
+
+  useEffect(() => {
+    if (
+      phase !== 'PLAYING' ||
+      !isImprovementPrototype ||
+      shouldShowRotateHint ||
+      isJournalOpen ||
+      isChatOpen ||
+      isGameplayReady
+    ) {
+      return undefined;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      document.getElementById('main-game-viewport')?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [
+    isChatOpen,
+    isGameplayReady,
+    isImprovementPrototype,
+    isJournalOpen,
+    phase,
+    runId,
+    shouldShowRotateHint,
+  ]);
+
+  useEffect(() => {
+    const handleWindowBlur = () => setIsWindowFocused(false);
+    const handleWindowFocus = () => setIsWindowFocused(true);
+
+    window.addEventListener('blur', handleWindowBlur);
+    window.addEventListener('focus', handleWindowFocus);
+    return () => {
+      window.removeEventListener('blur', handleWindowBlur);
+      window.removeEventListener('focus', handleWindowFocus);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (
+      !isWindowFocused ||
+      phase !== 'PLAYING' ||
+      !isImprovementPrototype ||
+      isJournalOpen ||
+      isChatOpen ||
+      shouldShowRotateHint
+    ) {
+      return;
+    }
+    focusMainViewport();
+  }, [
+    focusMainViewport,
+    isChatOpen,
+    isImprovementPrototype,
+    isJournalOpen,
+    isWindowFocused,
+    phase,
+    shouldShowRotateHint,
+  ]);
 
   useEffect(() => {
     const compactQuery = window.matchMedia('(max-width: 1179px)');
@@ -1045,6 +1158,20 @@ export default function AppV2() {
         'MISSED',
       ];
       if (!authoredPhases.includes(nextPhase as BroadcastAnomalyPhase)) return;
+      if (
+        isImprovementPrototypeRef.current &&
+        nextPhase === 'TELEGRAPH' &&
+        !shouldPublishPrototypeComment(
+          prototypeActiveElapsedRef.current,
+          'hint',
+        )
+      ) {
+        pushComment({
+          username: 'SYSTEM_LIVE',
+          text: `PIP差分を検出：${anomaly.description}。取得枠を校正してください。`,
+          type: 'system',
+        });
+      }
       scheduleBroadcastBurst(
         createAnomalyChatBurst({
           eventId: `${runIdRef.current}:${anomaly.id}:${anomaly.directorState?.cycle ?? 0}:${nextPhase}`,
@@ -1067,7 +1194,7 @@ export default function AppV2() {
       }
 
     },
-    [advanceViewerRisk, handleAddLog, scheduleBroadcastBurst],
+    [advanceViewerRisk, handleAddLog, pushComment, scheduleBroadcastBurst],
   );
 
   const handlePickupItem = useCallback(
@@ -1175,7 +1302,7 @@ export default function AppV2() {
     ) {
       if (isImprovementPrototypeRef.current) {
         AudioSynth.playNotification();
-        handleAddLog('【PROTOTYPE LOCK】証拠は揃った。観測者を撮らず、Eで非常口から脱出する。');
+        handleAddLog('【ROUTE LOCK】証拠は揃った。観測者を撮らず、Eで非常口から脱出する。');
         pushComment({
           username: 'mod_taku',
           text: 'もう撮るな。同接を増やすな。Eで外へ出ろ！',
@@ -1299,6 +1426,9 @@ export default function AppV2() {
 
   const handlePipCaptureAnomaly = useCallback(
     (requestedTarget?: CameraCaptureTarget | null) => {
+      if (isImprovementPrototypeRef.current && !isGameplayReady) {
+        setIsGameplayReady(true);
+      }
       const captured = handleCaptureAnomaly(requestedTarget);
       window.requestAnimationFrame(() => {
         document
@@ -1307,7 +1437,7 @@ export default function AppV2() {
       });
       return captured;
     },
-    [handleCaptureAnomaly],
+    [handleCaptureAnomaly, isGameplayReady],
   );
 
   const handleExit = useCallback(() => {
@@ -1645,6 +1775,8 @@ export default function AppV2() {
     setHasChaseCompleted(false);
     setIsJournalOpen(false);
     setIsChatOpen(false);
+    setIsGameplayReady(false);
+    setIsGameplaySurfaceFocused(false);
     phaseRef.current = 'PLAYING';
     setPhase('PLAYING');
     handleAddLog('【RECONNECT】直前のセーフドアから配信を再接続した。');
@@ -1720,7 +1852,11 @@ export default function AppV2() {
       setItems(nextItems);
       setAnomalies(nextAnomalies);
       setLogs([...sessionBoard.initialLogs]);
-      setComments(createBoardComments(boardId));
+      setComments(
+        improvementPrototype
+          ? createImprovementPrototypeComments()
+          : createBoardComments(boardId),
+      );
       setRouteLoopCount(0);
       climaxActiveRef.current = false;
       setIsClimaxActive(false);
@@ -1734,6 +1870,8 @@ export default function AppV2() {
       setIsChatOpen(false);
       setShowObjective(false);
       setIsRotateHintDismissed(false);
+      setIsGameplayReady(false);
+      setIsGameplaySurfaceFocused(false);
       setIsMuted(false);
       gameOverTriggeredRef.current = false;
       emptyBatteryLoggedRef.current = false;
@@ -1753,7 +1891,7 @@ export default function AppV2() {
   }, [prepareBoardSession, runMode, selectedBoardId]);
 
   const startImprovementPrototype = useCallback(() => {
-    prepareBoardSession('hospital', 'STANDARD', 'INTRO_STORY', true);
+    prepareBoardSession('hospital', 'STANDARD', 'PLAYING', true);
   }, [prepareBoardSession]);
 
   const returnToTitle = useCallback(() => {
@@ -1823,6 +1961,7 @@ export default function AppV2() {
         ),
       )
     : anomalies;
+  const latestComment = comments.at(-1);
 
   return (
     <div
@@ -1834,7 +1973,10 @@ export default function AppV2() {
       <div className="pointer-events-none fixed inset-0 noise-layer opacity-[0.035]" />
 
       {phase === 'TITLE' && (
-        <TitleScreenV2 onStartGame={() => setPhase('BOARD_SELECT')} />
+        <TitleScreenV2
+          onStartGame={startImprovementPrototype}
+          onBrowseBoards={() => setPhase('BOARD_SELECT')}
+        />
       )}
 
       {phase === 'BOARD_SELECT' && (
@@ -1911,7 +2053,7 @@ export default function AppV2() {
       )}
 
       {showGameplaySurface && (
-        <div className={`playing-shell relative z-10 ${phase === 'POST_LIVE' ? 'post-live-shell' : ''}`}>
+        <div className={`playing-shell relative z-10 ${phase === 'POST_LIVE' ? 'post-live-shell' : ''} ${isImprovementPrototype ? 'prototype-route' : ''}`}>
           <StreamHeaderV2
             viewerCount={viewerCount}
             battery={Math.ceil(player.battery)}
@@ -1926,8 +2068,9 @@ export default function AppV2() {
             isMuted={isMuted}
             onOpenJournal={openJournal}
             onOpenChat={openChat}
-            onShowObjective={() => setShowObjective(true)}
+            onShowObjective={showCurrentObjective}
             isInert={phase === 'POST_LIVE' || isJournalOpen || isChatOpen || shouldShowRotateHint}
+            isPaused={isImprovementPrototype && isInterfacePaused}
           />
 
           {shouldShowRotateHint && (
@@ -1987,6 +2130,12 @@ export default function AppV2() {
                   hidePlayer={phase === 'POST_LIVE'}
                   improvementPrototype={isImprovementPrototype}
                   chaseActive={isChaseActive}
+                  awaitingFirstInput={isAwaitingGameplayReady}
+                  onFirstInput={() => setIsGameplayReady(true)}
+                  showFocusPrompt={!isImprovementPrototype}
+                  onFocusChange={
+                    isImprovementPrototype ? setIsGameplaySurfaceFocused : undefined
+                  }
                 />
 
                 <section className={`mission-tracker ${showObjective ? 'objective-open' : ''}`} aria-label="配信ミッション進行">
@@ -2029,7 +2178,7 @@ export default function AppV2() {
                         <span><BookOpen aria-hidden="true" /> {items.filter((item) => item.found).length}/{items.length}</span>
                       )}
                     </div>
-                    <button type="button" onClick={() => setShowObjective(false)} aria-label="目的表示を閉じる">
+                    <button type="button" onClick={hideCurrentObjective} aria-label="目的表示を閉じる">
                       <X aria-hidden="true" />
                     </button>
                   </section>
@@ -2055,29 +2204,42 @@ export default function AppV2() {
 
             <aside className={`playing-rail ${isChatOpen ? 'chat-open' : ''}`} aria-label="配信補助画面">
               <div
-                className="pip-slot"
+                className="pip-stack"
                 inert={isChatOpen ? true : undefined}
               >
-                <PipCameraV2
-                  key={`${runId}-pip`}
-                  currentAnomaly={nearest.anomaly}
-                  anomalyDistance={nearest.distance}
-                  tension={player.tension}
-                  flashlightOn={player.flashlightOn && player.battery > 0}
-                  onCaptureAnomaly={handlePipCaptureAnomaly}
-                  onTargetChange={handlePipTargetChange}
-                  player={player}
-                  anomalies={anomalies}
-                  items={items}
-                  boardId={selectedBoardId}
-                  runId={runId}
-                  loopCount={routeLoopCount}
-                  riskTier={riskTier}
-                  reducedMotion={prefersReducedMotion}
-                  isPaused={isInterfacePaused && phase !== 'POST_LIVE'}
-                  climaxActive={isClimaxActive}
-                  subtleCaptureFeedback={isImprovementPrototype}
-                />
+                <div className="pip-slot">
+                  <PipCameraV2
+                    key={`${runId}-pip`}
+                    currentAnomaly={nearest.anomaly}
+                    anomalyDistance={nearest.distance}
+                    tension={player.tension}
+                    flashlightOn={player.flashlightOn && player.battery > 0}
+                    onCaptureAnomaly={handlePipCaptureAnomaly}
+                    onTargetChange={handlePipTargetChange}
+                    player={player}
+                    anomalies={anomalies}
+                    items={items}
+                    boardId={selectedBoardId}
+                    runId={runId}
+                    loopCount={routeLoopCount}
+                    riskTier={riskTier}
+                    reducedMotion={prefersReducedMotion}
+                    isPaused={isInterfacePaused && phase !== 'POST_LIVE'}
+                    climaxActive={isClimaxActive}
+                    subtleCaptureFeedback={isImprovementPrototype}
+                  />
+                </div>
+                {isImprovementPrototype && latestComment && (
+                  <button
+                    type="button"
+                    className="compact-chat-strip"
+                    onClick={openChat}
+                    aria-label={`コメント欄を開く。最新コメント: ${latestComment.text}`}
+                  >
+                    <span><MessageSquareText aria-hidden="true" /> CHAT / {latestComment.username}</span>
+                    <strong>{latestComment.text}</strong>
+                  </button>
+                )}
               </div>
 
               <button
@@ -2193,9 +2355,9 @@ export default function AppV2() {
             </p>
 
             {isImprovementPrototype && prototypeResult && (
-              <section className="mt-6 border border-white/10 bg-black/30 p-4" aria-label="改善プロトタイプ所要時間判定">
+              <section className="mt-6 border border-white/10 bg-black/30 p-4" aria-label="配信経過記録">
                 <p className="font-mono text-[8px] uppercase tracking-[0.18em] text-red-700">
-                  quality gate 2 / duration check
+                  transmission archive / elapsed
                 </p>
                 <div className="mt-2 flex items-end justify-between gap-4">
                   <strong className="text-2xl text-zinc-100">
@@ -2206,11 +2368,15 @@ export default function AppV2() {
                       ? 'text-emerald-400'
                       : 'text-amber-400'
                   }`}>
-                    {prototypeResult.durationBand.replace('_', ' ')}
+                    {prototypeResult.durationBand === 'IN_TARGET'
+                      ? 'SIGNAL STABLE'
+                      : prototypeResult.durationBand === 'UNDER_TARGET'
+                        ? 'SHORT TRACE'
+                        : 'LONG TRACE'}
                   </span>
                 </div>
                 <p className="mt-2 text-[10px] leading-5 text-zinc-600">
-                  合格時間帯は180〜300秒。操作感・視認性・怖さは人間オーナーの実機確認が必要です。
+                  白鳴霊園付属病棟から切断されるまでの配信記録。
                 </p>
                 <dl className="mt-3 grid gap-x-4 gap-y-1 border-t border-white/8 pt-3 font-mono text-[7px] sm:grid-cols-2">
                   {prototypeResult.milestones.map((milestone) => (
@@ -2248,7 +2414,7 @@ export default function AppV2() {
                 className="inline-flex min-h-11 flex-1 items-center justify-center gap-2 border border-red-900 bg-[#0b0808] px-5 py-3 text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-200 transition hover:border-red-700 hover:bg-red-950/25 active:translate-y-px"
               >
                 <RotateCcw className="h-4 w-4" />
-                {isImprovementPrototype ? 'retry prototype' : 'stream again'}
+                {isImprovementPrototype ? 'reconnect hospital' : 'stream again'}
               </button>
               <button
                 type="button"

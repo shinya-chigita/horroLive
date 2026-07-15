@@ -1,4 +1,4 @@
-import type { Anomaly, AnomalyResolution, Chapter } from '../types';
+import type { Anomaly, AnomalyResolution, Chapter, Comment } from '../types';
 import type { BoardDefinition } from './boardDefinitions';
 
 export const IMPROVEMENT_PROTOTYPE_ID = 'hospital-standard-gate-2';
@@ -12,11 +12,31 @@ export const IMPROVEMENT_PROTOTYPE_REQUIRED_CAPTURES = [
 ] as const;
 
 export const IMPROVEMENT_PROTOTYPE_WORLD_END = 5_000;
+export const IMPROVEMENT_PROTOTYPE_CALIBRATION_MS = 25_000;
+
+export function shouldPublishPrototypeComment(
+  activeElapsedMs: number,
+  type: Comment['type'],
+): boolean {
+  return type === 'system' || activeElapsedMs >= IMPROVEMENT_PROTOTYPE_CALIBRATION_MS;
+}
+
+export function createImprovementPrototypeComments(now = Date.now()): Comment[] {
+  return [
+    {
+      id: 'hospital-gate-2-system-calibration',
+      username: 'SYSTEM_LIVE',
+      text: '回線校正中。Main同期、PIP遅延520ms。入力信号を待っています。',
+      type: 'system',
+      timestamp: now,
+    },
+  ];
+}
 
 export const IMPROVEMENT_PROTOTYPE_CHAPTERS: readonly Chapter[] = [
   {
     id: 1,
-    title: 'Prototype 1: CALIBRATION',
+    title: 'Chapter 1: CALIBRATION',
     subtitle: '侵入口・濡れた廊下',
     startPos: 0,
     endPos: 1_200,
@@ -24,7 +44,7 @@ export const IMPROVEMENT_PROTOTYPE_CHAPTERS: readonly Chapter[] = [
   },
   {
     id: 2,
-    title: 'Prototype 2: SECOND VIEW',
+    title: 'Chapter 2: SECOND VIEW',
     subtitle: '第一病棟・扉の死角',
     startPos: 1_200,
     endPos: 2_400,
@@ -32,15 +52,15 @@ export const IMPROVEMENT_PROTOTYPE_CHAPTERS: readonly Chapter[] = [
   },
   {
     id: 3,
-    title: 'Prototype 3: GOING VIRAL',
+    title: 'Chapter 3: SIGNAL RISE',
     subtitle: '診療棟・反復する映像',
     startPos: 2_400,
     endPos: 3_600,
-    description: '反復映像の怪異を記録し、同接増加が危険を強めることを確かめる。',
+    description: '反復映像の怪異を記録し、同接の向こうから近づく気配に備える。',
   },
   {
     id: 4,
-    title: 'Prototype 4: ESCAPE',
+    title: 'Chapter 4: EXIT SIGNAL',
     subtitle: '電波管理室・非常口',
     startPos: 3_600,
     endPos: IMPROVEMENT_PROTOTYPE_WORLD_END,
@@ -66,10 +86,6 @@ export function createImprovementPrototypeBoard(
 ): BoardDefinition {
   return {
     ...hospital,
-    title: '改善プロトタイプ',
-    subtitle: '品質ゲート2・固定検証経路',
-    description: '撮影、同接リスク、逃走、LIVE残留だけを検証する隔離経路。',
-    locationLabel: '廃病院・改善プロトタイプ経路',
     worldEnd: IMPROVEMENT_PROTOTYPE_WORLD_END,
     chapters: IMPROVEMENT_PROTOTYPE_CHAPTERS,
     intros: [
@@ -93,8 +109,8 @@ export function createImprovementPrototypeBoard(
       }),
     routeRules: [],
     initialLogs: [
-      '【PROTOTYPE】品質ゲート2固定経路を開始。新しい盤面・分岐・収集要素は無効。',
-      '【GOAL】校正撮影→PIP限定撮影→バズ→追跡→脱出→LIVE残留。',
+      '【SYSTEM】白鳴霊園付属病棟・深夜回線へ接続。三系統の記録を開始する。',
+      '【ROUTE】校正撮影→PIP限定撮影→同接上昇→追跡→非常口。',
     ],
   };
 }
@@ -112,21 +128,21 @@ const PROTOTYPE_CAPTURE_GATES: readonly PrototypeCaptureGate[] = [
     chapterId: 1,
     anomalyId: 'hospital.anomaly.footsteps',
     retryX: 360,
-    log: '【PROTOTYPE GATE】最初の異変を撮影するまで先へ進めない。PIPの照準を合わせてCAPTUREする。',
+    log: '【ROUTE LOCK】最初の異変を撮影するまで先へ進めない。PIPの照準を合わせてCAPTUREする。',
     chat: '今の足跡を右上で撮って。撮影しないと同接も危険度も動かない。',
   },
   {
     chapterId: 2,
     anomalyId: 'hospital.anomaly.door-figure',
     retryX: 1_260,
-    log: '【PROTOTYPE GATE】Mainにいない人影をPIPで記録するまで先へ進めない。',
+    log: '【ROUTE LOCK】Mainにいない人影をPIPで記録するまで先へ進めない。',
     chat: 'Mainじゃなく右上。扉の陰の人影を枠の中央に入れてCAPTURE。',
   },
   {
     chapterId: 3,
     anomalyId: 'hospital.anomaly.wheelchair',
     retryX: 2_620,
-    log: '【PROTOTYPE GATE】反復する車椅子を撮影し、同接リスクを最大段階まで上げる。',
+    log: '【ROUTE LOCK】反復する車椅子を撮影し、同接リスクを最大段階まで上げる。',
     chat: '車椅子、フレームごとに向きが違う。今のうちに撮ってから先へ。',
   },
 ];

@@ -43,8 +43,6 @@ const HOSPITAL_PROPS_CELL_WIDTH =
   HOSPITAL_PROPS_ATLAS.width / HOSPITAL_PROPS_ATLAS.columns;
 const HOSPITAL_PROPS_CELL_HEIGHT =
   HOSPITAL_PROPS_ATLAS.height / HOSPITAL_PROPS_ATLAS.rows;
-const OBSERVER_ATLAS = RUNTIME_ATLASES.observer;
-const OBSERVER_CELL_WIDTH = OBSERVER_ATLAS.width / OBSERVER_ATLAS.columns;
 
 interface AtlasSpriteProps {
   href: string;
@@ -169,17 +167,6 @@ function BoardSignal({ boardId }: { boardId: BoardId }) {
         width={92}
         height={86}
       />
-      <AtlasSprite
-        href={OBSERVER_ATLAS.url}
-        atlasWidth={OBSERVER_ATLAS.width}
-        atlasHeight={OBSERVER_ATLAS.height}
-        viewBox={`0 0 ${OBSERVER_CELL_WIDTH} ${OBSERVER_ATLAS.height}`}
-        x={346}
-        y={17}
-        width={74}
-        height={150}
-        opacity={0.24}
-      />
       <rect x="0" y="0" width="420" height="176" fill="url(#hospitalFade)" />
       <defs>
         <linearGradient id="hospitalFade" x1="0" x2="1">
@@ -255,6 +242,30 @@ export default function BoardSelectScreen({
 
         <main className="grid flex-1 gap-7 py-6 lg:grid-cols-[minmax(0,1.5fr)_minmax(310px,.65fr)] lg:items-start lg:gap-8 lg:py-8">
           <section aria-labelledby="board-list-heading">
+            <div className="mb-5 border border-white/10 bg-[#090a09] p-4 lg:hidden">
+              <div className="flex items-center gap-2 font-mono text-[9px] uppercase tracking-[0.16em] text-zinc-500">
+                <Radio className="h-3 w-3 text-red-800" aria-hidden="true" /> recommended signal / hospital
+              </div>
+              <h2 className="mt-2 text-base font-semibold tracking-[0.08em] text-zinc-200">
+                廃病院・深夜固定回線
+              </h2>
+              <p className="mt-2 text-[11px] leading-5 text-zinc-500">
+                Main、遅れて届くPIP、先にざわつくChatを見比べ、三つの異変を記録して非常口へ向かう。
+              </p>
+              <button
+                type="button"
+                onClick={onStartPrototype}
+                data-route-id="hospital-standard-gate-2"
+                className="mt-4 flex min-h-14 w-full items-center justify-between border border-red-950 bg-[#0b0909] px-4 py-3 text-left transition-colors hover:border-red-800 hover:bg-red-950/20"
+              >
+                <span>
+                  <span className="block font-mono text-[8px] uppercase tracking-[0.16em] text-red-700">channel ready / 23:47</span>
+                  <span className="mt-1 block text-xs font-semibold tracking-[0.1em] text-zinc-100">白鳴霊園付属病棟へ接続</span>
+                </span>
+                <ChevronRight className="h-4 w-4 text-red-800" aria-hidden="true" />
+              </button>
+            </div>
+
             <div className="mb-3 flex items-end justify-between gap-4">
               <div>
                 <p className="font-mono text-[8px] uppercase tracking-[0.16em] text-zinc-700">01 / board</p>
@@ -356,24 +367,25 @@ export default function BoardSelectScreen({
           </section>
 
           <aside className="border border-white/10 bg-[#080808]/95 lg:sticky lg:top-8" aria-labelledby="mode-heading">
-            <div className="border-b border-red-950/80 bg-red-950/10 p-4 sm:p-5">
-              <div className="flex items-center gap-2 font-mono text-[8px] uppercase tracking-[0.16em] text-red-700">
-                <Radio className="h-3 w-3" aria-hidden="true" /> quality gate 2
+            <div className="hidden border-b border-white/10 bg-[#090a09] p-4 sm:p-5 lg:block">
+              <div className="flex items-center gap-2 font-mono text-[9px] uppercase tracking-[0.16em] text-zinc-500">
+                <Radio className="h-3 w-3 text-red-800" aria-hidden="true" /> recommended signal / hospital
               </div>
-              <h2 className="mt-2 text-sm font-semibold tracking-[0.08em] text-zinc-200">
-                改善プロトタイプ
+              <h2 className="mt-2 text-base font-semibold tracking-[0.08em] text-zinc-200">
+                廃病院・深夜固定回線
               </h2>
-              <p className="mt-2 text-[9px] leading-relaxed text-zinc-600">
-                病院STANDARDの固定検証経路。撮影→同接上昇→追跡→脱出→LIVE残留を3〜5分で確認する。
+              <p className="mt-2 text-[11px] leading-5 text-zinc-500">
+                Main、遅れて届くPIP、先にざわつくChatを見比べ、三つの異変を記録して非常口へ向かう。
               </p>
               <button
                 type="button"
                 onClick={onStartPrototype}
-                className="mt-4 flex w-full items-center justify-between border border-red-900/80 bg-red-950/35 px-4 py-3 text-left transition-colors hover:border-red-700 hover:bg-red-950/50"
+                data-route-id="hospital-standard-gate-2"
+                className="mt-4 flex min-h-14 w-full items-center justify-between border border-red-950 bg-[#0b0909] px-4 py-3 text-left transition-colors hover:border-red-800 hover:bg-red-950/20"
               >
                 <span>
-                  <span className="block font-mono text-[7px] uppercase tracking-[0.16em] text-red-700">required route / 180–300 sec</span>
-                  <span className="mt-1 block text-[11px] font-semibold tracking-[0.1em] text-zinc-100">品質ゲート用ビルドを開始</span>
+                  <span className="block font-mono text-[8px] uppercase tracking-[0.16em] text-red-700">channel ready / 23:47</span>
+                  <span className="mt-1 block text-xs font-semibold tracking-[0.1em] text-zinc-100">白鳴霊園付属病棟へ接続</span>
                 </span>
                 <ChevronRight className="h-4 w-4 text-red-800" aria-hidden="true" />
               </button>

@@ -4,6 +4,7 @@ import type { PlayerState, RiskTier } from '../types.ts';
 
 import {
   createImprovementPrototypeBoard,
+  createImprovementPrototypeComments,
   evaluateImprovementPrototypeDuration,
   evaluateImprovementPrototypeGate,
   getResolvedCaptureFailureCopy,
@@ -11,6 +12,7 @@ import {
   IMPROVEMENT_PROTOTYPE_REQUIRED_CAPTURES,
   measurePrototypeActiveFrame,
   selectPrototypeScareType,
+  shouldPublishPrototypeComment,
 } from './improvementPrototype.ts';
 import {
   createAnomalyDirectorState,
@@ -78,7 +80,7 @@ test('prototype capture gates require the authored capture in the first three ch
     status: 'BLOCK',
     anomalyId: 'hospital.anomaly.footsteps',
     retryX: 360,
-    log: '【PROTOTYPE GATE】最初の異変を撮影するまで先へ進めない。PIPの照準を合わせてCAPTUREする。',
+    log: '【ROUTE LOCK】最初の異変を撮影するまで先へ進めない。PIPの照準を合わせてCAPTUREする。',
     chat: '今の足跡を右上で撮って。撮影しないと同接も危険度も動かない。',
   });
 
@@ -99,6 +101,45 @@ test('prototype capture gates require the authored capture in the first three ch
     evaluateImprovementPrototypeGate(3, chapterOneRecorded).status,
     'BLOCK',
   );
+});
+
+test('player-facing route copy does not expose internal quality-gate language', () => {
+  const board = createImprovementPrototypeBoard(getBoardDefinition('hospital'));
+  const initialComments = createImprovementPrototypeComments(23_470);
+  const blockedGateCopy = [1, 2, 3].flatMap((chapterId) => {
+    const decision = evaluateImprovementPrototypeGate(chapterId, []);
+    return decision.status === 'BLOCK' ? [decision.log, decision.chat] : [];
+  });
+  const playerFacingCopy = [
+    board.title,
+    board.subtitle,
+    board.description,
+    board.locationLabel,
+    ...board.initialLogs,
+    ...board.intros.flatMap((beat) => [beat.label, beat.text]),
+    ...board.chapters.flatMap((chapter) => [
+      chapter.title,
+      chapter.subtitle,
+      chapter.description,
+    ]),
+    ...blockedGateCopy,
+    ...initialComments.flatMap((comment) => [comment.username, comment.text]),
+  ].join('\n');
+
+  assert.doesNotMatch(
+    playerFacingCopy,
+    /prototype|プロトタイプ|品質ゲート|required route|固定検証経路/i,
+  );
+  assert.equal(initialComments.length, 1);
+  assert.equal(initialComments[0].type, 'system');
+  assert.equal(initialComments[0].timestamp, 23_470);
+});
+
+test('the first 25 active seconds keep calibration Chat system-only', () => {
+  assert.equal(shouldPublishPrototypeComment(0, 'system'), true);
+  assert.equal(shouldPublishPrototypeComment(24_999, 'hint'), false);
+  assert.equal(shouldPublishPrototypeComment(24_999, 'normal'), false);
+  assert.equal(shouldPublishPrototypeComment(25_000, 'hint'), true);
 });
 
 test('a stale RECORDED resolution cannot satisfy a prototype capture gate', () => {
