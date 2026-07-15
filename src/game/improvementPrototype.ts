@@ -55,6 +55,12 @@ const IMPROVEMENT_PROTOTYPE_ANOMALY_IDS = new Set([
   'hospital.anomaly.ceiling',
 ]);
 
+const IMPROVEMENT_PROTOTYPE_ANOMALY_X: Readonly<Record<string, number>> = {
+  // Keep the first floor evidence before the entry bed so it has a visible,
+  // capturable approach window. The normal hospital route stays untouched.
+  'hospital.anomaly.footsteps': 400,
+};
+
 export function createImprovementPrototypeBoard(
   hospital: BoardDefinition,
 ): BoardDefinition {
@@ -77,9 +83,14 @@ export function createImprovementPrototypeBoard(
       },
     ],
     items: [],
-    anomalies: hospital.anomalies.filter((anomaly) =>
-      IMPROVEMENT_PROTOTYPE_ANOMALY_IDS.has(anomaly.id),
-    ),
+    anomalies: hospital.anomalies
+      .filter((anomaly) => IMPROVEMENT_PROTOTYPE_ANOMALY_IDS.has(anomaly.id))
+      .map((anomaly) => {
+        const prototypeX = IMPROVEMENT_PROTOTYPE_ANOMALY_X[anomaly.id];
+        return prototypeX === undefined
+          ? anomaly
+          : { ...anomaly, x: prototypeX };
+      }),
     routeRules: [],
     initialLogs: [
       '【PROTOTYPE】品質ゲート2固定経路を開始。新しい盤面・分岐・収集要素は無効。',
@@ -183,6 +194,23 @@ export function evaluateImprovementPrototypeDuration(
     return 'OVER_TARGET';
   }
   return 'IN_TARGET';
+}
+
+export interface PrototypeActiveFrameMeasurement {
+  activeDeltaMs: number;
+  nextPreviousAtMs: number;
+}
+
+/** Counts the complete visible interval; callers rebase on visibility change. */
+export function measurePrototypeActiveFrame(
+  previousAtMs: number,
+  nowMs: number,
+  isVisible: boolean,
+): PrototypeActiveFrameMeasurement {
+  return {
+    activeDeltaMs: isVisible ? Math.max(0, nowMs - previousAtMs) : 0,
+    nextPreviousAtMs: nowMs,
+  };
 }
 
 export type PrototypeScareType = 'jumpscare' | 'chase' | 'whisper';

@@ -245,19 +245,40 @@ function PipCameraV2({
     ctx.fillStyle = '#030504';
     ctx.fillRect(0, 0, WIDTH, HEIGHT);
 
+    const resumeFromPause = (now: number) => {
+      if (pausedAt === null) {
+        previousFrame = now;
+        return;
+      }
+      const pausedFor = Math.max(0, now - pausedAt);
+      if (frozenUntil > pausedAt) frozenUntil += pausedFor;
+      if (focusBlurUntil > pausedAt) focusBlurUntil += pausedFor;
+      previousFrame = now;
+      pausedAt = null;
+    };
+
+    const handleVisibilityChange = () => {
+      const now = performance.now();
+      if (document.visibilityState !== 'visible') {
+        if (pausedAt === null) pausedAt = now;
+        return;
+      }
+      resumeFromPause(now);
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
     const render = (now: number) => {
       animationId = window.requestAnimationFrame(render);
       const metadata = feedRef.current;
-      if (metadata.isPaused) {
+      if (
+        metadata.isPaused ||
+        document.visibilityState !== 'visible'
+      ) {
         if (pausedAt === null) pausedAt = now;
         return;
       }
       if (pausedAt !== null) {
-        const pausedFor = Math.max(0, now - pausedAt);
-        if (frozenUntil > pausedAt) frozenUntil += pausedFor;
-        if (focusBlurUntil > pausedAt) focusBlurUntil += pausedFor;
-        previousFrame = now;
-        pausedAt = null;
+        resumeFromPause(now);
       }
 
       canonicalFallbackRef.current.anomalies?.forEach((anomaly) => {
@@ -461,6 +482,7 @@ function PipCameraV2({
     animationId = window.requestAnimationFrame(render);
     return () => {
       window.cancelAnimationFrame(animationId);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       displayedTargetRef.current = null;
       targetChangeRef.current?.(null);
     };
@@ -496,8 +518,10 @@ function PipCameraV2({
       displayedTarget.distance < 390 &&
       displayedTarget.isFramed,
   );
-  const captureReady = displayedTarget?.canCapture === true;
-  const captureUnavailable = displayedTarget?.reason === 'BATTERY_EMPTY';
+  const batteryEmpty = (player?.battery ?? displayedTelemetry.battery) <= 0;
+  const captureReady = displayedTarget?.canCapture === true && !batteryEmpty;
+  const captureUnavailable =
+    batteryEmpty || displayedTarget?.reason === 'BATTERY_EMPTY';
   const projectedTargetStyle: React.CSSProperties | undefined =
     displayedTarget?.projection
       ? {
@@ -532,6 +556,10 @@ function PipCameraV2({
           transform: 'translate(-50%, -50%)',
         }
       : undefined;
+  const currentRigBattery = Math.max(
+    0,
+    Math.ceil(player?.battery ?? displayedTelemetry.battery),
+  );
 
   return (
     <section
@@ -610,7 +638,7 @@ function PipCameraV2({
           {displayedTelemetry.flashlightOn ? 'LOW LIGHT' : 'IR GAIN +18'} / DVR 0.4–0.7s
         </p>
         <p className="flex items-center gap-1">
-          <BatteryMedium className="h-2.5 w-2.5" /> RIG {displayedTelemetry.battery}%
+          <BatteryMedium className="h-2.5 w-2.5" /> RIG {currentRigBattery}%
         </p>
         <p>
           VIEW {displayedTelemetry.facing === -1 ? '←' : '→'} / PITCH {displayedTelemetry.pitchDegrees}°

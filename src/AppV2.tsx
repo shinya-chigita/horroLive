@@ -48,7 +48,10 @@ import {
   VIEWER_BANDS,
 } from './game/risk';
 import { canonicalSceneHistory } from './game/sceneSnapshot';
-import { CameraCaptureTarget } from './game/capture';
+import {
+  CameraCaptureTarget,
+  normalizeCaptureTargetForBattery,
+} from './game/capture';
 import {
   createAnomalyDirectorState,
   isAnomalyResolved,
@@ -81,6 +84,8 @@ import {
   evaluateImprovementPrototypeGate,
   getResolvedCaptureFailureCopy,
   hasCompleteImprovementPrototypeSequence,
+  IMPROVEMENT_PROTOTYPE_REQUIRED_CAPTURES,
+  measurePrototypeActiveFrame,
   type ImprovementPrototypeDurationBand,
 } from './game/improvementPrototype';
 import { getViewerThreatProfile } from './game/viewerThreat';
@@ -372,19 +377,24 @@ export default function AppV2() {
     }
     let animationId = 0;
     let previousAt = performance.now();
+    const rebaseActiveClock = () => {
+      previousAt = performance.now();
+    };
     const countActiveFrame = (now: number) => {
-      const deltaMs = Math.max(0, now - previousAt);
-      previousAt = now;
-      if (document.visibilityState === 'visible') {
-        // A hidden tab resumes with a very large RAF gap. Capping one frame
-        // prevents that paused time from becoming a false 3–5 minute pass.
-        prototypeActiveElapsedRef.current += Math.min(250, deltaMs);
-      }
+      const measurement = measurePrototypeActiveFrame(
+        previousAt,
+        now,
+        document.visibilityState === 'visible',
+      );
+      previousAt = measurement.nextPreviousAtMs;
+      prototypeActiveElapsedRef.current += measurement.activeDeltaMs;
       animationId = window.requestAnimationFrame(countActiveFrame);
     };
+    document.addEventListener('visibilitychange', rebaseActiveClock);
     animationId = window.requestAnimationFrame(countActiveFrame);
     return () => {
       window.cancelAnimationFrame(animationId);
+      document.removeEventListener('visibilitychange', rebaseActiveClock);
     };
   }, [isImprovementPrototype, isInterfacePaused, phase]);
 
@@ -810,13 +820,19 @@ export default function AppV2() {
   useEffect(() => {
     if (phase !== 'PLAYING') {
       setShowObjective(false);
+      return;
+    }
+    if (isInterfacePaused) return;
+    setShowObjective(true);
+  }, [chapterId, isInterfacePaused, phase]);
+
+  useEffect(() => {
+    if (phase !== 'PLAYING' || isInterfacePaused || !showObjective) {
       return undefined;
     }
-
-    setShowObjective(true);
     const timer = window.setTimeout(() => setShowObjective(false), 5000);
     return () => window.clearTimeout(timer);
-  }, [chapterId, phase]);
+  }, [isInterfacePaused, phase, showObjective]);
 
   useEffect(() => {
     if (phase !== 'POST_LIVE') return undefined;
@@ -1147,8 +1163,11 @@ export default function AppV2() {
 
   const handleCaptureAnomaly = useCallback((requestedTarget?: CameraCaptureTarget | null) => {
     if (phaseRef.current !== 'PLAYING') return false;
-    const captureDecision = requestedTarget ?? latestPipTargetRef.current;
     const currentPlayer = playerRef.current;
+    const captureDecision = normalizeCaptureTargetForBattery(
+      requestedTarget ?? latestPipTargetRef.current,
+      currentPlayer.battery,
+    );
     if (
       climaxActiveRef.current &&
       captureDecision?.targetId === 'stream.observer' &&
@@ -1277,6 +1296,19 @@ export default function AppV2() {
     });
     return false;
   }, [advanceViewerRisk, finishRun, handleAddLog, prefersReducedMotion, pushComment, recordPrototypeMilestone, scheduleBroadcastBurst]);
+
+  const handlePipCaptureAnomaly = useCallback(
+    (requestedTarget?: CameraCaptureTarget | null) => {
+      const captured = handleCaptureAnomaly(requestedTarget);
+      window.requestAnimationFrame(() => {
+        document
+          .getElementById('main-game-viewport')
+          ?.focus({ preventScroll: true });
+      });
+      return captured;
+    },
+    [handleCaptureAnomaly],
+  );
 
   const handleExit = useCallback(() => {
     if (!climaxActiveRef.current) return;
@@ -1784,6 +1816,13 @@ export default function AppV2() {
   const currentObjectiveCopy = isChaseActive
     ? '観測者がMain側へ侵入した。止まらず非常口まで走る。'
     : activeBoard.chapters[chapterId - 1].description;
+  const objectiveAnomalies = isImprovementPrototype
+    ? anomalies.filter((anomaly) =>
+        IMPROVEMENT_PROTOTYPE_REQUIRED_CAPTURES.includes(
+          anomaly.id as (typeof IMPROVEMENT_PROTOTYPE_REQUIRED_CAPTURES)[number],
+        ),
+      )
+    : anomalies;
 
   return (
     <div
@@ -1950,7 +1989,7 @@ export default function AppV2() {
                   chaseActive={isChaseActive}
                 />
 
-                <section className="mission-tracker" aria-label="配信ミッション進行">
+                <section className={`mission-tracker ${showObjective ? 'objective-open' : ''}`} aria-label="配信ミッション進行">
                   <div className="mission-spine">
                     {missionSteps.map((step, index) => (
                       <span
@@ -1985,7 +2024,7 @@ export default function AppV2() {
                       <strong>{currentObjectiveCopy}</strong>
                     </div>
                     <div className="objective-evidence" aria-label="記録状況">
-                      <span><Camera aria-hidden="true" /> {anomalies.filter((anomaly) => anomaly.captured).length}/{anomalies.length}</span>
+                      <span><Camera aria-hidden="true" /> {objectiveAnomalies.filter((anomaly) => anomaly.captured).length}/{objectiveAnomalies.length}</span>
                       {!isImprovementPrototype && (
                         <span><BookOpen aria-hidden="true" /> {items.filter((item) => item.found).length}/{items.length}</span>
                       )}
@@ -2025,7 +2064,7 @@ export default function AppV2() {
                   anomalyDistance={nearest.distance}
                   tension={player.tension}
                   flashlightOn={player.flashlightOn && player.battery > 0}
-                  onCaptureAnomaly={handleCaptureAnomaly}
+                  onCaptureAnomaly={handlePipCaptureAnomaly}
                   onTargetChange={handlePipTargetChange}
                   player={player}
                   anomalies={anomalies}

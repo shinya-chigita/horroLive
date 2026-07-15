@@ -6,6 +6,7 @@ import {
   CAPTURE_MAX_DISTANCE,
   createPipCaptureFrame,
   evaluatePipCapture,
+  normalizeCaptureTargetForBattery,
   PIP_LOGICAL_VIEW_HEIGHT,
   PIP_LOGICAL_VIEW_WIDTH,
 } from './capture.ts';
@@ -234,6 +235,19 @@ test('flashlight and battery state independently block capture', () => {
   const empty = evaluate(anomaly, 0, { flashlightOn: true, battery: 0 });
   assert.equal(empty.reason, 'BATTERY_EMPTY');
   assert.equal(empty.canCapture, false);
+});
+
+test('current battery overrides a READY decision from the delayed PIP frame', () => {
+  const delayedReady = evaluate(makeAnomaly({ x: centeredWorldX() }));
+  assert.equal(delayedReady.reason, 'READY');
+
+  const normalized = normalizeCaptureTargetForBattery(delayedReady, 0);
+  assert.equal(normalized?.canCapture, false);
+  assert.equal(normalized?.reason, 'BATTERY_EMPTY');
+  assert.strictEqual(
+    normalizeCaptureTargetForBattery(delayedReady, 1),
+    delayedReady,
+  );
 });
 
 test('a missing target returns a stable non-capturable decision', () => {
