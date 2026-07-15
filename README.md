@@ -4,6 +4,12 @@
 
 廃病院または下校放送の止まらない旧校舎を生配信しながら探索し、肉眼では見えない怪異をPIPカメラで記録します。視聴者コメントには攻略の手掛かりも混ざりますが、すべてが人間から届いた言葉とは限りません。
 
+## 現在の開発工程
+
+現在は **改善プロトタイプ工程** です。盤面選択の「品質ゲート用ビルドを開始」から、病院STANDARDの固定経路で `撮影 → 同接上昇 → 観測者接近 → 逃走 → 脱出 → LIVE残留` を3〜5分で検証します。
+
+廃校、周回、複数エンディングなどの既存拡張は参考実装として凍結中です。改善プロトタイプの品質ゲートと人間オーナー承認が完了するまで、Vertical Sliceへ進みません。運用ルールは [AI組織型開発ワークフロー](docs/AI_DEVELOPMENT_WORKFLOW.md)、判定状況は [品質ゲート2](docs/QUALITY_GATE_02_IMPROVEMENT_PROTOTYPE.md) を参照してください。
+
 ## ゲームの特徴
 
 - **配信画面そのものがゲームUI** — 同時接続数、コメント、映像ノイズ、回線状態が物語と連動します。
@@ -65,7 +71,7 @@ npm run build
 
 ゲーム進行と配信状態は `src/AppV2.tsx`、盤面は `src/game/boardDefinitions.ts`、リアルタイムの探索描画は `src/components/MainGameView.tsx` に分離しています。MainとPIPは `src/game/sceneSnapshot.ts` の共通SceneSnapshot履歴と `src/game/cameraProjection.ts` の投影規則を使い、背景・設備は `src/game/sceneDefinitions.ts` でデータ定義しています。コメント連動は `src/game/broadcastEventDirector.ts`、光の遮蔽判定は `src/game/flashlightOcclusion.ts` が担当します。
 
-最新のクリエイティブ基準は [Creative Direction v4](docs/CREATIVE_DIRECTION_V4.md)、代表遭遇の仕様は [Vertical Slice & Gimmick Direction v4](docs/VERTICAL_SLICE_GIMMICKS_V4.md)、画像制作と実装契約は [Art & Asset Bible v4](docs/ART_ASSET_BIBLE_V4.md)、盤面・周回拡張は [Expansion v3.2](docs/EXPANSION_V3_2.md) を参照してください。v3.1資料は履歴として残しています。
+現在工程の正本は [AI組織型開発ワークフロー](docs/AI_DEVELOPMENT_WORKFLOW.md) と [品質ゲート2](docs/QUALITY_GATE_02_IMPROVEMENT_PROTOTYPE.md) です。クリエイティブ基準は [Creative Direction v4](docs/CREATIVE_DIRECTION_V4.md)、代表遭遇の仕様は [Vertical Slice & Gimmick Direction v4](docs/VERTICAL_SLICE_GIMMICKS_V4.md)、画像制作と実装契約は [Art & Asset Bible v4](docs/ART_ASSET_BIBLE_V4.md) を参照してください。盤面・周回拡張の [Expansion v3.2](docs/EXPANSION_V3_2.md) とv3.1資料は、品質ゲート2通過まで参考資料として凍結します。
 
 コンセプト制作物:
 

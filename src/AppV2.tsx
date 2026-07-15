@@ -75,6 +75,15 @@ import {
 } from './game/progression';
 import { evaluateRoute } from './game/route';
 import { getItemWorldPositions } from './game/sceneDefinitions';
+import {
+  createImprovementPrototypeBoard,
+  evaluateImprovementPrototypeDuration,
+  evaluateImprovementPrototypeGate,
+  getResolvedCaptureFailureCopy,
+  hasCompleteImprovementPrototypeSequence,
+  type ImprovementPrototypeDurationBand,
+} from './game/improvementPrototype';
+import { getViewerThreatProfile } from './game/viewerThreat';
 import { AudioSynth } from './utils/audio';
 
 const USER_NAMES = [
@@ -174,6 +183,18 @@ interface BroadcastTimerTask {
   fire: () => void;
 }
 
+interface ImprovementPrototypeResult {
+  durationMs: number;
+  durationBand: ImprovementPrototypeDurationBand;
+  milestones: readonly ImprovementPrototypeMilestone[];
+  sequenceComplete: boolean;
+}
+
+interface ImprovementPrototypeMilestone {
+  id: string;
+  elapsedMs: number;
+}
+
 const createInitialViewerRisk = (
   boardId: BoardId = 'hospital',
   _chapterId = 1,
@@ -204,6 +225,11 @@ export default function AppV2() {
   const [isMuted, setIsMuted] = useState(false);
   const [introStep, setIntroStep] = useState(0);
   const [endingType, setEndingType] = useState<EndingType>('ESCAPED');
+  const [isImprovementPrototype, setIsImprovementPrototype] = useState(false);
+  const [isChaseActive, setIsChaseActive] = useState(false);
+  const [hasChaseCompleted, setHasChaseCompleted] = useState(false);
+  const [prototypeResult, setPrototypeResult] =
+    useState<ImprovementPrototypeResult | null>(null);
   const [showChapterCard, setShowChapterCard] = useState(false);
   const [showObjective, setShowObjective] = useState(false);
   const [isJournalOpen, setIsJournalOpen] = useState(false);
@@ -236,8 +262,13 @@ export default function AppV2() {
   const [routeLoopCount, setRouteLoopCount] = useState(0);
   const [isClimaxActive, setIsClimaxActive] = useState(false);
   const activeBoard = useMemo(
-    () => getBoardDefinition(selectedBoardId),
-    [selectedBoardId],
+    () => {
+      const board = getBoardDefinition(selectedBoardId);
+      return isImprovementPrototype
+        ? createImprovementPrototypeBoard(getBoardDefinition('hospital'))
+        : board;
+    },
+    [isImprovementPrototype, selectedBoardId],
   );
   const modeDefinition = activeBoard.modes[runMode];
   const viewerCount = viewerRisk.viewerCount;
@@ -263,6 +294,12 @@ export default function AppV2() {
   const routeLoopCountRef = useRef(routeLoopCount);
   const climaxActiveRef = useRef(isClimaxActive);
   const riskTierRef = useRef(riskTier);
+  const isImprovementPrototypeRef = useRef(isImprovementPrototype);
+  const chaseActiveRef = useRef(isChaseActive);
+  const chaseCompletedRef = useRef(hasChaseCompleted);
+  const prototypeActiveElapsedRef = useRef(0);
+  const prototypeMilestonesRef = useRef<ImprovementPrototypeMilestone[]>([]);
+  const recentAmbientTextsRef = useRef<string[]>([]);
   const latestPipTargetRef = useRef<CameraCaptureTarget | null>(null);
   const announcedRiskBandsRef = useRef(new Set<string>());
   const nearestRef = useRef<{ anomaly: Anomaly | null; distance: number }>({
@@ -287,6 +324,10 @@ export default function AppV2() {
   const rotateDialogRef = useRef<HTMLElement | null>(null);
   const journalReturnFocusRef = useRef<HTMLElement | null>(null);
   const chatReturnFocusRef = useRef<HTMLElement | null>(null);
+
+  const getPrototypeActiveElapsedMs = useCallback(() => {
+    return Math.max(0, Math.round(prototypeActiveElapsedRef.current));
+  }, []);
 
   const nearest = useMemo(() => {
     let anomaly: Anomaly | null = null;
@@ -319,6 +360,33 @@ export default function AppV2() {
   useEffect(() => {
     phaseRef.current = phase;
   }, [phase]);
+
+  useEffect(() => {
+    if (!isImprovementPrototype || phase !== 'PLAYING' || isInterfacePaused) {
+      return undefined;
+    }
+    if (prototypeMilestonesRef.current.length === 0) {
+      prototypeMilestonesRef.current = [
+        { id: 'PLAYING_STARTED', elapsedMs: 0 },
+      ];
+    }
+    let animationId = 0;
+    let previousAt = performance.now();
+    const countActiveFrame = (now: number) => {
+      const deltaMs = Math.max(0, now - previousAt);
+      previousAt = now;
+      if (document.visibilityState === 'visible') {
+        // A hidden tab resumes with a very large RAF gap. Capping one frame
+        // prevents that paused time from becoming a false 3–5 minute pass.
+        prototypeActiveElapsedRef.current += Math.min(250, deltaMs);
+      }
+      animationId = window.requestAnimationFrame(countActiveFrame);
+    };
+    animationId = window.requestAnimationFrame(countActiveFrame);
+    return () => {
+      window.cancelAnimationFrame(animationId);
+    };
+  }, [isImprovementPrototype, isInterfacePaused, phase]);
 
   useEffect(() => {
     itemsRef.current = items;
@@ -363,6 +431,18 @@ export default function AppV2() {
   }, [riskTier]);
 
   useEffect(() => {
+    isImprovementPrototypeRef.current = isImprovementPrototype;
+  }, [isImprovementPrototype]);
+
+  useEffect(() => {
+    chaseActiveRef.current = isChaseActive;
+  }, [isChaseActive]);
+
+  useEffect(() => {
+    chaseCompletedRef.current = hasChaseCompleted;
+  }, [hasChaseCompleted]);
+
+  useEffect(() => {
     nearestRef.current = nearest;
   }, [nearest]);
 
@@ -386,6 +466,17 @@ export default function AppV2() {
     },
     [],
   );
+
+  const recordPrototypeMilestone = useCallback((id: string) => {
+    if (!isImprovementPrototypeRef.current) return;
+    if (prototypeMilestonesRef.current.some((milestone) => milestone.id === id)) {
+      return;
+    }
+    prototypeMilestonesRef.current = [
+      ...prototypeMilestonesRef.current,
+      { id, elapsedMs: getPrototypeActiveElapsedMs() },
+    ];
+  }, [getPrototypeActiveElapsedMs]);
 
   useEffect(() => {
     if (phase !== 'PLAYING' || isInterfacePaused) return;
@@ -517,7 +608,9 @@ export default function AppV2() {
     let timerId = 0;
 
     const schedule = () => {
-      const delay = 2000 + Math.random() * 2000;
+      const delay = isImprovementPrototypeRef.current
+        ? 4200 + Math.random() * 2600
+        : 2000 + Math.random() * 2000;
       timerId = window.setTimeout(emitComment, delay);
     };
 
@@ -529,43 +622,76 @@ export default function AppV2() {
       const currentPlayer = playerRef.current;
       const currentNearest = nearestRef.current;
       const currentChapter = chapterRef.current;
-      const user = USER_NAMES[Math.floor(Math.random() * USER_NAMES.length)];
-      const badge = BADGES[Math.floor(Math.random() * BADGES.length)];
+      let user = USER_NAMES[Math.floor(Math.random() * USER_NAMES.length)];
+      let badge = BADGES[Math.floor(Math.random() * BADGES.length)];
+
+      const chooseLine = (lines: readonly string[]) => {
+        if (!isImprovementPrototypeRef.current) {
+          return lines[Math.floor(Math.random() * lines.length)];
+        }
+        const recent = recentAmbientTextsRef.current;
+        const candidates = lines.filter((line) => !recent.includes(line));
+        const pool = candidates.length > 0 ? candidates : lines;
+        return pool[Math.floor(Math.random() * pool.length)];
+      };
 
       let text = 'ここ、空気やばくない？';
       let type: Comment['type'] = 'normal';
 
       if (riskTierRef.current >= 3 || currentPlayer.tension > 82) {
         const lines = activeBoard.chatLines.hijack;
-        text = lines[Math.floor(Math.random() * lines.length)];
+        text = chooseLine(lines);
         type = Math.random() > 0.35 ? 'spooky' : 'glitch';
       } else if (!currentPlayer.flashlightOn) {
         const lines = activeBoard.chatLines.dark;
-        text = lines[Math.floor(Math.random() * lines.length)];
+        text = chooseLine(lines);
         type = 'spooky';
       } else if (currentPlayer.isRunning) {
         const lines = activeBoard.chatLines.running;
-        text = lines[Math.floor(Math.random() * lines.length)];
+        text = chooseLine(lines);
       } else if (
         currentNearest.anomaly &&
         currentNearest.distance < 430 &&
         !currentNearest.anomaly.captured
       ) {
         const lines = activeBoard.chatLines.nearby;
-        text = lines[Math.floor(Math.random() * lines.length)];
+        text = chooseLine(lines);
         type = 'hint';
       } else {
         const lines = activeBoard.chatLines.ambient;
-        text = lines[Math.floor(Math.random() * lines.length)];
+        text = chooseLine(lines);
       }
 
-      if ((riskTier >= 3 || currentChapter >= 4) && Math.random() < 0.32) {
+      if ((riskTierRef.current >= 3 || currentChapter >= 4) && Math.random() < 0.32) {
         const lines = activeBoard.chatLines.hijack;
-        text = lines[Math.floor(Math.random() * lines.length)];
+        text = chooseLine(lines);
         type = 'glitch';
       }
 
+      if (
+        isImprovementPrototypeRef.current &&
+        getViewerThreatProfile(riskTierRef.current).suppressHumanChat
+      ) {
+        const corruptedUsers = ['SYSTEM_2347', 'room_2B', 'まだ見てる'];
+        user = corruptedUsers[Math.floor(Math.random() * corruptedUsers.length)];
+        badge = undefined;
+        type = 'glitch';
+      }
+
+      if (
+        isImprovementPrototypeRef.current &&
+        text === '同接じわじわ増えてる'
+      ) {
+        text = '配信、ちゃんと届いてる？';
+      }
+
       pushComment({ username: user, text, type, badge });
+      if (isImprovementPrototypeRef.current) {
+        recentAmbientTextsRef.current = [
+          ...recentAmbientTextsRef.current.filter((line) => line !== text),
+          text,
+        ].slice(-3);
+      }
 
       if (type !== 'glitch' && Math.random() < 0.22) {
         AudioSynth.playNotification();
@@ -694,10 +820,11 @@ export default function AppV2() {
 
   useEffect(() => {
     if (phase !== 'POST_LIVE') return undefined;
+    if (isImprovementPrototype) return undefined;
     setShowObjective(false);
     const timer = window.setTimeout(() => setPhase('ENDING'), 7_200);
     return () => window.clearTimeout(timer);
-  }, [phase]);
+  }, [isImprovementPrototype, phase]);
 
   const handleToggleMute = useCallback(() => {
     setIsMuted((previous) => {
@@ -869,26 +996,24 @@ export default function AppV2() {
         AudioSynth.playGlitch();
       }
 
-      setPlayer((previous) => {
-        if (type === 'chase') {
-          return {
-            ...previous,
-            tension: Math.max(
-              prefersReducedMotion ? 84 : 95,
-              previous.tension,
-            ),
-          };
-        }
-        const increase = type === 'jumpscare'
-          ? prefersReducedMotion ? 20 : 35
-          : prefersReducedMotion ? 9 : 15;
-        return {
-          ...previous,
-          tension: Math.min(100, previous.tension + increase),
-        };
-      });
+      if (
+        type === 'chase' &&
+        isImprovementPrototypeRef.current &&
+        !chaseActiveRef.current
+      ) {
+        chaseActiveRef.current = true;
+        setIsChaseActive(true);
+        recordPrototypeMilestone('CHASE_STARTED');
+        handleAddLog('【CHASE】同接に引き寄せられた観測者がMain側へ侵入した。非常口まで走れ。');
+        pushComment({
+          username: 'mod_taku',
+          text: '後ろにいる。止まるな、非常口まで走れ！',
+          type: 'hint',
+          badge: 'mod',
+        });
+      }
     },
-    [prefersReducedMotion],
+    [handleAddLog, prefersReducedMotion, pushComment, recordPrototypeMilestone],
   );
 
   const handleAnomalyCue = useCallback(
@@ -916,6 +1041,7 @@ export default function AppV2() {
         anomaly.id === 'hospital.anomaly.footsteps' ||
         anomaly.id === 'school.anomaly.shoe-locker';
       if (
+        !isImprovementPrototypeRef.current &&
         isCalibrationAnomaly &&
         riskTierRef.current === 0 &&
         (nextPhase === 'IGNORED' || nextPhase === 'MISSED')
@@ -923,6 +1049,7 @@ export default function AppV2() {
         advanceViewerRisk();
         handleAddLog('【DVR CALIBRATED】撮影成否にかかわらず、遅延映像の同期が確立した。');
       }
+
     },
     [advanceViewerRisk, handleAddLog, scheduleBroadcastBurst],
   );
@@ -951,27 +1078,50 @@ export default function AppV2() {
   const finishRun = useCallback(
     (resolvedEnding: EndingType, nextPhase: 'ENDING' | 'POST_LIVE') => {
       setEndingType(resolvedEnding);
-      setProgression((current) =>
-        recordRun(current, {
-          runId: runIdRef.current,
-          boardId: selectedBoardId,
-          mode: runMode,
-          ending: resolvedEnding,
-          foundItemIds: itemsRef.current
-            .filter((item) => item.found)
-            .map((item) => item.id),
-          recordedAnomalyIds: anomaliesRef.current
-            .filter((anomaly) => anomaly.captured)
-            .map((anomaly) => anomaly.id),
-        }),
-      );
+      if (isImprovementPrototypeRef.current) {
+        if (prototypeMilestonesRef.current.length > 0) {
+          const durationMs = getPrototypeActiveElapsedMs();
+          const milestones = prototypeMilestonesRef.current.some(
+            (milestone) => milestone.id === 'RUN_FINISHED',
+          )
+            ? prototypeMilestonesRef.current
+            : [
+                ...prototypeMilestonesRef.current,
+                { id: 'RUN_FINISHED', elapsedMs: durationMs },
+              ];
+          prototypeMilestonesRef.current = milestones;
+          setPrototypeResult({
+            durationMs,
+            durationBand: evaluateImprovementPrototypeDuration(durationMs),
+            milestones,
+            sequenceComplete: hasCompleteImprovementPrototypeSequence(milestones),
+          });
+        }
+      } else {
+        setProgression((current) =>
+          recordRun(current, {
+            runId: runIdRef.current,
+            boardId: selectedBoardId,
+            mode: runMode,
+            ending: resolvedEnding,
+            foundItemIds: itemsRef.current
+              .filter((item) => item.found)
+              .map((item) => item.id),
+            recordedAnomalyIds: anomaliesRef.current
+              .filter((anomaly) => anomaly.captured)
+              .map((anomaly) => anomaly.id),
+          }),
+        );
+      }
       climaxActiveRef.current = false;
       setIsClimaxActive(false);
+      chaseActiveRef.current = false;
+      setIsChaseActive(false);
       phaseRef.current = nextPhase;
       setPhase(nextPhase);
       AudioSynth.playStinger();
     },
-    [runMode, selectedBoardId],
+    [getPrototypeActiveElapsedMs, runMode, selectedBoardId],
   );
 
   const handlePipTargetChange = useCallback(
@@ -1004,6 +1154,17 @@ export default function AppV2() {
       captureDecision?.targetId === 'stream.observer' &&
       captureDecision.canCapture
     ) {
+      if (isImprovementPrototypeRef.current) {
+        AudioSynth.playNotification();
+        handleAddLog('【PROTOTYPE LOCK】証拠は揃った。観測者を撮らず、Eで非常口から脱出する。');
+        pushComment({
+          username: 'mod_taku',
+          text: 'もう撮るな。同接を増やすな。Eで外へ出ろ！',
+          type: 'hint',
+          badge: 'mod',
+        });
+        return false;
+      }
       setViewerRisk((current) =>
         transitionViewerRisk(current, {
           viewerCount: getViewerBand(3),
@@ -1016,6 +1177,7 @@ export default function AppV2() {
           tier: 3,
         }),
       );
+      recordPrototypeMilestone('CLIMAX_CAPTURED');
       finishRun('OVER_EXPLOITED', 'POST_LIVE');
       return true;
     }
@@ -1024,6 +1186,21 @@ export default function AppV2() {
           (candidate) => candidate.id === captureDecision.targetId,
         ) ?? null
       : null;
+
+    if (
+      isImprovementPrototypeRef.current &&
+      target?.id === 'hospital.anomaly.ceiling'
+    ) {
+      AudioSynth.playNotification();
+      handleAddLog('【CHASE】天井の観測者は撮影対象ではない。非常口まで走る。');
+      pushComment({
+        username: 'mod_taku',
+        text: '撮るな、もうMain側にいる。非常口まで走れ！',
+        type: 'hint',
+        badge: 'mod',
+      });
+      return false;
+    }
 
     if (
       target &&
@@ -1047,6 +1224,7 @@ export default function AppV2() {
       AudioSynth.playCaptureSuccess();
       if (!prefersReducedMotion) AudioSynth.playGlitch();
       advanceViewerRisk();
+      recordPrototypeMilestone(`CAPTURED:${target.id}`);
       handleAddLog(
         `【CAPTURE成功】${target.description} を記録した。配信の注目度が上昇した。`,
       );
@@ -1082,25 +1260,39 @@ export default function AppV2() {
       OCCLUDED: '棚か扉で隠れてる。ライトを振って、死角から外して。',
       FLASHLIGHT_OFF: '真っ暗でピントが拾えてない。ライトを点けて。',
       RISK_LOCKED: 'まだ輪郭だけだ。カメラが対象として認識してない。',
-      RESOLVED: 'その映像はもう記録済みだ。電池を無駄にするな。',
       BATTERY_EMPTY: 'カメラ電池が空だ。撮影できてない。',
     };
+    const reason = captureDecision?.reason ?? 'NO_TARGET';
+    const failureCopy = reason === 'RESOLVED'
+      ? getResolvedCaptureFailureCopy(target?.resolution)
+      : reasonCopy[reason] ?? '今のは違う。対象を中央に捉えてから記録して。';
     AudioSynth.playNotification();
     handleAddLog(
-      `【FOCUS LOST】撮影失敗。カメラ電池 -4。${captureDecision?.reason ?? 'NO_TARGET'}`,
+      `【FOCUS LOST】撮影失敗。カメラ電池 -4。${reason}`,
     );
     pushComment({
       username: 'baka_camera',
-      text:
-        reasonCopy[captureDecision?.reason ?? 'NO_TARGET'] ??
-        '今のは違う。対象を中央に捉えてから記録して。',
+      text: failureCopy,
       type: 'hint',
     });
     return false;
-  }, [advanceViewerRisk, finishRun, handleAddLog, prefersReducedMotion, pushComment, scheduleBroadcastBurst]);
+  }, [advanceViewerRisk, finishRun, handleAddLog, prefersReducedMotion, pushComment, recordPrototypeMilestone, scheduleBroadcastBurst]);
 
   const handleExit = useCallback(() => {
     if (!climaxActiveRef.current) return;
+    if (
+      isImprovementPrototypeRef.current &&
+      !chaseCompletedRef.current
+    ) {
+      handleAddLog('【EXIT LOCKED】観測者を振り切るまで非常口を開けられない。');
+      pushComment({
+        username: 'mod_taku',
+        text: 'まだ後ろにいる。走って距離を取れ！',
+        type: 'hint',
+        badge: 'mod',
+      });
+      return;
+    }
     const totalFound = itemsRef.current.filter((item) => item.found).length;
     const totalCaptured = anomaliesRef.current.filter((anomaly) => anomaly.captured).length;
     const resolvedEnding: EndingType =
@@ -1109,20 +1301,109 @@ export default function AppV2() {
         ? 'LOST_ARCHIVE'
         : 'ESCAPED';
     handleAddLog('【EXIT】撮影を打ち切り、非常口から建物の外へ脱出した。');
-    finishRun(resolvedEnding, 'ENDING');
-  }, [activeBoard, finishRun, handleAddLog]);
+    recordPrototypeMilestone('EXIT_USED');
+    finishRun(
+      isImprovementPrototypeRef.current ? 'ESCAPED' : resolvedEnding,
+      isImprovementPrototypeRef.current ? 'POST_LIVE' : 'ENDING',
+    );
+  }, [activeBoard, finishRun, handleAddLog, pushComment, recordPrototypeMilestone]);
 
   const handleChapterComplete = useCallback(() => {
     const currentChapter = chapterRef.current;
     if (transitionGuardRef.current === currentChapter) return;
     transitionGuardRef.current = currentChapter;
 
-    const route = evaluateRoute(
-      activeBoard,
-      currentChapter,
-      itemsRef.current,
-      routeLoopCountRef.current,
-    );
+    const restartPrototypeAnomaly = (
+      anomalyId: string,
+      retryX: number,
+      log: string,
+      chat: string,
+    ) => {
+      setAnomalies((previous) => {
+        const next = previous.map((anomaly) => {
+          if (anomaly.id !== anomalyId) return anomaly;
+          const currentTransitionCount =
+            anomaly.directorState?.transitionCount ?? 0;
+          const currentCycle = anomaly.directorState?.cycle ?? 0;
+          return {
+            ...anomaly,
+            captured: false,
+            resolution: null,
+            directorState: {
+              ...createAnomalyDirectorState(anomaly.id, 0),
+              transitionCount: currentTransitionCount + 1,
+              cycle: currentCycle + 1,
+            },
+          };
+        });
+        anomaliesRef.current = next;
+        return next;
+      });
+      latestPipTargetRef.current = null;
+      alertedPipTargetIdsRef.current = new Set(
+        [...alertedPipTargetIdsRef.current].filter(
+          (targetId) => targetId !== anomalyId,
+        ),
+      );
+      setPlayer((previous) => {
+        const next = {
+          ...previous,
+          x: retryX,
+          tension: Math.min(previous.tension, 58),
+          health: Math.max(previous.health, 45),
+          battery: Math.max(previous.battery, 35),
+          flashlightOn: true,
+          isRunning: false,
+        };
+        playerRef.current = next;
+        return next;
+      });
+      handleAddLog(log);
+      pushComment({
+        username: 'mod_taku',
+        text: chat,
+        type: 'hint',
+        badge: 'mod',
+      });
+      if (routeGuardTimerRef.current !== null) {
+        window.clearTimeout(routeGuardTimerRef.current);
+      }
+      const guardedRunId = runIdRef.current;
+      routeGuardTimerRef.current = window.setTimeout(() => {
+        if (
+          runIdRef.current === guardedRunId &&
+          transitionGuardRef.current === currentChapter
+        ) {
+          transitionGuardRef.current = null;
+        }
+        routeGuardTimerRef.current = null;
+      }, 700);
+    };
+
+    if (isImprovementPrototypeRef.current) {
+      const prototypeGate = evaluateImprovementPrototypeGate(
+        currentChapter,
+        anomaliesRef.current,
+      );
+      if (prototypeGate.status === 'BLOCK') {
+        restartPrototypeAnomaly(
+          prototypeGate.anomalyId,
+          prototypeGate.retryX,
+          prototypeGate.log,
+          prototypeGate.chat,
+        );
+        return;
+      }
+    }
+
+    const route = isImprovementPrototypeRef.current
+      ? { status: 'ALLOW' as const }
+      : evaluateRoute(
+          activeBoard,
+          currentChapter,
+          itemsRef.current,
+          routeLoopCountRef.current,
+        );
     if (route.status === 'BLOCK') {
       handleAddLog(
         route.kind === 'LOOP'
@@ -1187,6 +1468,34 @@ export default function AppV2() {
       return;
     }
 
+    if (
+      isImprovementPrototypeRef.current &&
+      !chaseActiveRef.current
+    ) {
+      restartPrototypeAnomaly(
+        'hospital.anomaly.ceiling',
+        3_880,
+        '【CHASE GATE】同接上昇で接近した観測者を振り切る必要がある。PIP上端の予兆を確認する。',
+        '終わってない。右上の天井を見て――来たら非常口まで走れ。',
+      );
+      return;
+    }
+
+    if (isImprovementPrototypeRef.current) {
+      chaseActiveRef.current = false;
+      chaseCompletedRef.current = true;
+      setIsChaseActive(false);
+      setHasChaseCompleted(true);
+      recordPrototypeMilestone('CHASE_CLEARED');
+      handleAddLog('【CHASE CLEAR】観測者を振り切り、非常口へ到達した。');
+      pushComment({
+        username: 'mod_taku',
+        text: '今だ、Eで出ろ。配信終了は外に出てから押せ！',
+        type: 'hint',
+        badge: 'mod',
+      });
+    }
+
     climaxActiveRef.current = true;
     setIsClimaxActive(true);
     setShowObjective(true);
@@ -1195,18 +1504,29 @@ export default function AppV2() {
         viewerCount: Math.max(current.viewerCount, getViewerBand(2)),
       }).state,
     );
-    handleAddLog('【FINAL CHOICE】Eで非常口から脱出するか、右上の人影をCAPTUREして配信を続ける。');
-    pushComment({
-      username: 'mod_taku',
-      text: '非常口でEなら脱出。右上の人影を撮れば、たぶんもう配信は切れない。',
-      type: 'hint',
-      badge: 'mod',
-    });
+    if (isImprovementPrototypeRef.current) {
+      handleAddLog('【FINAL GOAL】Eで非常口から脱出する。追加撮影は行わない。');
+      pushComment({
+        username: 'mod_taku',
+        text: '非常口でE。もう撮るな、今すぐ外へ出ろ！',
+        type: 'hint',
+        badge: 'mod',
+      });
+    } else {
+      handleAddLog('【FINAL CHOICE】Eで非常口から脱出するか、右上の人影をCAPTUREして配信を続ける。');
+      pushComment({
+        username: 'mod_taku',
+        text: '非常口でEなら脱出。右上の人影を撮れば、たぶんもう配信は切れない。',
+        type: 'hint',
+        badge: 'mod',
+      });
+    }
   }, [
     activeBoard,
     handleAddLog,
     prefersReducedMotion,
     pushComment,
+    recordPrototypeMilestone,
   ]);
 
   const handleRetry = useCallback(() => {
@@ -1235,10 +1555,32 @@ export default function AppV2() {
     setAnomalies((previous) => {
       const next = previous.map((anomaly) => {
         const resetState = createAnomalyDirectorState(anomaly.id, 0);
+        if (
+          isImprovementPrototypeRef.current &&
+          anomaly.id === 'hospital.anomaly.ceiling' &&
+          currentChapter >= 4
+        ) {
+          return {
+            ...anomaly,
+            captured: false,
+            resolution: null,
+            directorState: {
+              ...resetState,
+              transitionCount:
+                (anomaly.directorState?.transitionCount ?? 0) + 1,
+              cycle: (anomaly.directorState?.cycle ?? 0) + 1,
+            },
+          };
+        }
         if (!isAnomalyResolved(anomaly)) {
           return {
             ...anomaly,
-            directorState: resetState,
+            directorState: {
+              ...resetState,
+              transitionCount:
+                (anomaly.directorState?.transitionCount ?? 0) + 1,
+              cycle: (anomaly.directorState?.cycle ?? 0) + 1,
+            },
             resolution: null,
           };
         }
@@ -1264,7 +1606,11 @@ export default function AppV2() {
     });
     gameOverTriggeredRef.current = false;
     climaxActiveRef.current = false;
+    chaseActiveRef.current = false;
+    chaseCompletedRef.current = false;
     setIsClimaxActive(false);
+    setIsChaseActive(false);
+    setHasChaseCompleted(false);
     setIsJournalOpen(false);
     setIsChatOpen(false);
     phaseRef.current = 'PLAYING';
@@ -1279,17 +1625,33 @@ export default function AppV2() {
   }, [activeBoard.chapters, clearBroadcastTimers, handleAddLog, modeDefinition, pushComment]);
 
   const prepareBoardSession = useCallback(
-    (boardId: BoardId, mode: RunMode, nextPhase: GamePhase = 'INTRO_STORY') => {
+    (
+      boardId: BoardId,
+      mode: RunMode,
+      nextPhase: GamePhase = 'INTRO_STORY',
+      improvementPrototype = false,
+    ) => {
       const board = getBoardDefinition(boardId);
-      const nextMode = board.modes[mode];
+      const sessionBoard = improvementPrototype
+        ? createImprovementPrototypeBoard(getBoardDefinition('hospital'))
+        : board;
+      const nextMode = sessionBoard.modes[mode];
       const nextRunId = uniqueId(`run-${boardId}`);
       const nextPlayer: PlayerState = {
         ...INITIAL_PLAYER,
         battery: nextMode.initialBattery,
         tension: nextMode.initialTension,
       };
-      const nextItems = createBoardItems(boardId);
-      const nextAnomalies = createBoardAnomalies(boardId);
+      const nextItems = improvementPrototype
+        ? sessionBoard.items.map((item) => ({ ...item, found: false }))
+        : createBoardItems(boardId);
+      const nextAnomalies = improvementPrototype
+        ? sessionBoard.anomalies.map((anomaly) => ({
+            ...anomaly,
+            captured: false,
+            resolution: null,
+          }))
+        : createBoardAnomalies(boardId);
 
       canonicalSceneHistory.clear();
       clearBroadcastTimers();
@@ -1298,6 +1660,7 @@ export default function AppV2() {
       approachedItemIdsRef.current.clear();
       passedItemIdsRef.current.clear();
       announcedRiskBandsRef.current.clear();
+      recentAmbientTextsRef.current = [];
       transitionGuardRef.current = null;
       if (routeGuardTimerRef.current !== null) {
         window.clearTimeout(routeGuardTimerRef.current);
@@ -1305,6 +1668,11 @@ export default function AppV2() {
       }
       chatSilenceUntilRef.current = 0;
       routeLoopCountRef.current = 0;
+      isImprovementPrototypeRef.current = improvementPrototype;
+      chaseActiveRef.current = false;
+      chaseCompletedRef.current = false;
+      prototypeActiveElapsedRef.current = 0;
+      prototypeMilestonesRef.current = [];
       runIdRef.current = nextRunId;
       playerRef.current = nextPlayer;
       itemsRef.current = nextItems;
@@ -1319,11 +1687,15 @@ export default function AppV2() {
       setPlayer(nextPlayer);
       setItems(nextItems);
       setAnomalies(nextAnomalies);
-      setLogs([...board.initialLogs]);
+      setLogs([...sessionBoard.initialLogs]);
       setComments(createBoardComments(boardId));
       setRouteLoopCount(0);
       climaxActiveRef.current = false;
       setIsClimaxActive(false);
+      setIsImprovementPrototype(improvementPrototype);
+      setIsChaseActive(false);
+      setHasChaseCompleted(false);
+      setPrototypeResult(null);
       setIntroStep(0);
       setEndingType('ESCAPED');
       setIsJournalOpen(false);
@@ -1334,17 +1706,23 @@ export default function AppV2() {
       gameOverTriggeredRef.current = false;
       emptyBatteryLoggedRef.current = false;
       AudioSynth.setMuted(false);
-      setProgression((current) =>
-        recordRunAttempt(current, { runId: nextRunId, boardId }),
-      );
+      if (!improvementPrototype) {
+        setProgression((current) =>
+          recordRunAttempt(current, { runId: nextRunId, boardId }),
+        );
+      }
       setPhase(nextPhase);
     },
     [clearBroadcastTimers],
   );
 
   const startSelectedBoard = useCallback(() => {
-    prepareBoardSession(selectedBoardId, runMode, 'INTRO_STORY');
+    prepareBoardSession(selectedBoardId, runMode, 'INTRO_STORY', false);
   }, [prepareBoardSession, runMode, selectedBoardId]);
+
+  const startImprovementPrototype = useCallback(() => {
+    prepareBoardSession('hospital', 'STANDARD', 'INTRO_STORY', true);
+  }, [prepareBoardSession]);
 
   const returnToTitle = useCallback(() => {
     canonicalSceneHistory.clear();
@@ -1396,10 +1774,16 @@ export default function AppV2() {
   const signalBlocked = player.tension > 82;
   const endingCopy = activeBoard.endings[endingType];
   const isLiveSurface = phase === 'PLAYING' || phase === 'POST_LIVE';
+  const showGameplaySurface =
+    phase === 'PLAYING' ||
+    (phase === 'POST_LIVE' && !isImprovementPrototype);
   const missionSteps = ['侵入', '異変', '撮影', '配信異常', '脱出'] as const;
-  const missionStep = isClimaxActive
+  const missionStep = isClimaxActive || isChaseActive
     ? missionSteps.length - 1
     : Math.min(missionSteps.length - 2, Math.max(0, chapterId - 1));
+  const currentObjectiveCopy = isChaseActive
+    ? '観測者がMain側へ侵入した。止まらず非常口まで走る。'
+    : activeBoard.chapters[chapterId - 1].description;
 
   return (
     <div
@@ -1422,6 +1806,7 @@ export default function AppV2() {
           onSelectBoard={setSelectedBoardId}
           onSelectMode={setRunMode}
           onStart={startSelectedBoard}
+          onStartPrototype={startImprovementPrototype}
           onBack={returnToTitle}
         />
       )}
@@ -1486,7 +1871,7 @@ export default function AppV2() {
         </section>
       )}
 
-      {isLiveSurface && (
+      {showGameplaySurface && (
         <div className={`playing-shell relative z-10 ${phase === 'POST_LIVE' ? 'post-live-shell' : ''}`}>
           <StreamHeaderV2
             viewerCount={viewerCount}
@@ -1561,6 +1946,8 @@ export default function AppV2() {
                   onExit={handleExit}
                   reducedMotion={prefersReducedMotion}
                   hidePlayer={phase === 'POST_LIVE'}
+                  improvementPrototype={isImprovementPrototype}
+                  chaseActive={isChaseActive}
                 />
 
                 <section className="mission-tracker" aria-label="配信ミッション進行">
@@ -1576,20 +1963,32 @@ export default function AppV2() {
                   </div>
                   <strong>
                     {isClimaxActive
-                      ? 'E：脱出 ／ 右上の人影をCAPTURE：配信継続'
-                      : activeBoard.chapters[chapterId - 1].description}
+                      ? isImprovementPrototype
+                        ? 'E：非常口から脱出する（追加撮影禁止）'
+                        : 'E：脱出 ／ 右上の人影をCAPTURE：配信継続'
+                      : currentObjectiveCopy}
                   </strong>
                 </section>
+
+                {isChaseActive && (
+                  <section className="chase-warning" role="status" aria-live="assertive">
+                    <p>CHASE / SIGNAL BREACH</p>
+                    <strong>止まるな。非常口まで走れ。</strong>
+                    <span>SHIFT + D ／ 停止するとTENSIONが致死域へ上昇</span>
+                  </section>
+                )}
 
                 {showObjective && (
                   <section className="current-objective" aria-label="現在の目的">
                     <div>
                       <p><Radio aria-hidden="true" /> CURRENT OBJECTIVE</p>
-                      <strong>{activeBoard.chapters[chapterId - 1].description}</strong>
+                      <strong>{currentObjectiveCopy}</strong>
                     </div>
                     <div className="objective-evidence" aria-label="記録状況">
                       <span><Camera aria-hidden="true" /> {anomalies.filter((anomaly) => anomaly.captured).length}/{anomalies.length}</span>
-                      <span><BookOpen aria-hidden="true" /> {items.filter((item) => item.found).length}/{items.length}</span>
+                      {!isImprovementPrototype && (
+                        <span><BookOpen aria-hidden="true" /> {items.filter((item) => item.found).length}/{items.length}</span>
+                      )}
                     </div>
                     <button type="button" onClick={() => setShowObjective(false)} aria-label="目的表示を閉じる">
                       <X aria-hidden="true" />
@@ -1604,6 +2003,7 @@ export default function AppV2() {
                     <span>LIVE SIGNAL CONTINUES / 終了操作を受け付けません</span>
                   </section>
                 )}
+
               </div>
 
               {showChapterCard && (
@@ -1637,6 +2037,7 @@ export default function AppV2() {
                   reducedMotion={prefersReducedMotion}
                   isPaused={isInterfacePaused && phase !== 'POST_LIVE'}
                   climaxActive={isClimaxActive}
+                  subtleCaptureFeedback={isImprovementPrototype}
                 />
               </div>
 
@@ -1720,6 +2121,24 @@ export default function AppV2() {
         </div>
       )}
 
+      {phase === 'POST_LIVE' && isImprovementPrototype && (
+        <section
+          className="post-live-only relative z-10"
+          aria-label="配信者消失後も終了しないLIVE表示"
+          role="status"
+          aria-live="assertive"
+          aria-atomic="true"
+          data-prototype-duration-ms={prototypeResult?.durationMs}
+          data-prototype-duration-band={prototypeResult?.durationBand}
+          data-prototype-sequence-complete={prototypeResult?.sequenceComplete}
+        >
+          <div className="post-live-only-mark">
+            <span aria-hidden="true" />
+            LIVE
+          </div>
+        </section>
+      )}
+
       {phase === 'ENDING' && (
         <section className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-[#040404] p-5 md:p-8">
           <div className="pointer-events-none absolute inset-0 broadcast-grid opacity-35" />
@@ -1733,6 +2152,37 @@ export default function AppV2() {
             <p className="mt-6 border-l border-red-700/70 pl-5 text-sm leading-8 text-zinc-300 md:text-base">
               {endingCopy.body}
             </p>
+
+            {isImprovementPrototype && prototypeResult && (
+              <section className="mt-6 border border-white/10 bg-black/30 p-4" aria-label="改善プロトタイプ所要時間判定">
+                <p className="font-mono text-[8px] uppercase tracking-[0.18em] text-red-700">
+                  quality gate 2 / duration check
+                </p>
+                <div className="mt-2 flex items-end justify-between gap-4">
+                  <strong className="text-2xl text-zinc-100">
+                    {Math.round(prototypeResult.durationMs / 1000)} sec
+                  </strong>
+                  <span className={`font-mono text-[9px] font-bold tracking-[0.14em] ${
+                    prototypeResult.durationBand === 'IN_TARGET'
+                      ? 'text-emerald-400'
+                      : 'text-amber-400'
+                  }`}>
+                    {prototypeResult.durationBand.replace('_', ' ')}
+                  </span>
+                </div>
+                <p className="mt-2 text-[10px] leading-5 text-zinc-600">
+                  合格時間帯は180〜300秒。操作感・視認性・怖さは人間オーナーの実機確認が必要です。
+                </p>
+                <dl className="mt-3 grid gap-x-4 gap-y-1 border-t border-white/8 pt-3 font-mono text-[7px] sm:grid-cols-2">
+                  {prototypeResult.milestones.map((milestone) => (
+                    <div key={milestone.id} className="flex justify-between gap-3 text-zinc-600">
+                      <dt className="truncate">{milestone.id}</dt>
+                      <dd>{(milestone.elapsedMs / 1000).toFixed(1)}s</dd>
+                    </div>
+                  ))}
+                </dl>
+              </section>
+            )}
 
             <div className="mt-8 grid grid-cols-3 gap-px overflow-hidden border border-white/8 bg-white/8">
               {[
@@ -1755,11 +2205,11 @@ export default function AppV2() {
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
               <button
                 type="button"
-                onClick={startSelectedBoard}
+                onClick={isImprovementPrototype ? startImprovementPrototype : startSelectedBoard}
                 className="inline-flex min-h-11 flex-1 items-center justify-center gap-2 border border-red-900 bg-[#0b0808] px-5 py-3 text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-200 transition hover:border-red-700 hover:bg-red-950/25 active:translate-y-px"
               >
                 <RotateCcw className="h-4 w-4" />
-                stream again
+                {isImprovementPrototype ? 'retry prototype' : 'stream again'}
               </button>
               <button
                 type="button"

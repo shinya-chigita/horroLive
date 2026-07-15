@@ -94,6 +94,23 @@ export function getViewerThreatProfile(
   return VIEWER_THREAT_PROFILES[riskTier];
 }
 
+const VIEWER_THREAT_TENSION_FLOORS: Readonly<Record<RiskTier, number>> =
+  Object.freeze({
+    0: 9,
+    1: 18,
+    2: 32,
+    3: 48,
+  });
+
+/**
+ * Turns stream growth into persistent gameplay pressure. The observer never
+ * causes unavoidable damage by itself, but every successful capture raises the
+ * calm-state floor before the authored chase supplies the lethal pressure.
+ */
+export function getViewerThreatTensionFloor(riskTier: RiskTier): number {
+  return VIEWER_THREAT_TENSION_FLOORS[riskTier];
+}
+
 /**
  * Owns the single camera-space presentation used by both PIP rendering and
  * synthetic capture framing. Keeping this mapping here prevents a drawn

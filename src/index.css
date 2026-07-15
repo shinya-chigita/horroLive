@@ -531,6 +531,96 @@ textarea:focus-visible,
   white-space: nowrap;
 }
 
+.chase-warning {
+  position: absolute;
+  z-index: 55;
+  top: 112px;
+  left: 50%;
+  width: min(520px, calc(100% - 32px));
+  transform: translateX(-50%);
+  border: 1px solid rgba(153, 27, 27, 0.72);
+  background: rgba(10, 2, 2, 0.9);
+  padding: 14px 18px;
+  color: #d4d4d0;
+  text-align: center;
+  box-shadow: 0 0 48px rgba(127, 29, 29, 0.24);
+  pointer-events: none;
+  animation: chase-warning-pulse 0.72s steps(2, end) infinite;
+}
+
+.chase-warning p,
+.chase-warning strong,
+.chase-warning span {
+  display: block;
+  margin: 0;
+}
+
+.chase-warning p {
+  color: #b72831;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+}
+
+.chase-warning strong {
+  margin-top: 7px;
+  font-family: var(--font-serif);
+  font-size: clamp(17px, 2.2vw, 26px);
+  letter-spacing: 0.08em;
+}
+
+.chase-warning span {
+  margin-top: 7px;
+  color: #777d76;
+  font-family: var(--font-mono);
+  font-size: 7px;
+  letter-spacing: 0.13em;
+}
+
+.post-live-only {
+  display: grid;
+  width: 100%;
+  height: 100dvh;
+  place-items: center;
+  overflow: hidden;
+  background: #000;
+  color: #8b2228;
+}
+
+.post-live-only::before {
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(255, 255, 255, 0.012) 0,
+    rgba(255, 255, 255, 0.012) 1px,
+    transparent 1px,
+    transparent 5px
+  );
+  content: "";
+  pointer-events: none;
+}
+
+.post-live-only-mark {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-family: var(--font-mono);
+  font-size: clamp(24px, 5vw, 62px);
+  font-weight: 900;
+  letter-spacing: 0.32em;
+  text-indent: 0.32em;
+  animation: live-failure-pulse 0.82s steps(1, end) infinite;
+}
+
+.post-live-only-mark span {
+  width: 0.3em;
+  height: 0.3em;
+  background: currentColor;
+}
+
 .current-objective {
   position: absolute;
   z-index: 46;
@@ -836,6 +926,11 @@ textarea:focus-visible,
   0%, 44% { opacity: 1; }
   45%, 62% { opacity: 0.38; }
   63%, 100% { opacity: 1; }
+}
+
+@keyframes chase-warning-pulse {
+  0%, 100% { border-color: rgba(153, 27, 27, 0.72); }
+  50% { border-color: rgba(220, 38, 38, 0.96); }
 }
 
 @media (max-width: 1179px) {
